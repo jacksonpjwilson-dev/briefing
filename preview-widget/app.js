@@ -5,7 +5,7 @@
 'use strict';
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const TZ='America/Toronto';
+let TZ='America/Toronto';
 // no money / financial info, ever (stricter than the public page)
 const FIN=/\$|CA\$|\bOSAP\b|NSLSC|\bBMO\b|chequing|savings|payday|refund|subscription|renew|\bloan\b|bank|account ending|financ|receipt|invoice|budget/i;
 const noFin=xs=>(xs||[]).filter(x=>!FIN.test(typeof x==='string'?x:JSON.stringify(x)));
@@ -52,7 +52,8 @@ function parseBriefingHTML(t){
  return b}
 async function getJSON(u){const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw Error(r.status);return r.json()}
 async function load(){
- // Briefing slice: the live public briefing Sunny publishes each morning (same origin), else the bundled snapshot.
+ // Owner fallback ONLY (CONFIG.PUBLIC_FALLBACK): the public briefing Sunny publishes, else the bundled snapshot.
+ if(!CONFIG.PUBLIC_FALLBACK)throw Error('public fallback is off');
  try{const r=await fetch('../index.html',{cache:'no-store'});if(!r.ok)throw 0;STORE.briefing=parseBriefingHTML(await r.text());STORE.meta.briefing='Live: public briefing'}
  catch(e){STORE.briefing=await getJSON('data/briefing.json');STORE.meta.briefing='Snapshot: '+STORE.briefing.date}
  const B=STORE.briefing;B.tasks=noFin(B.tasks);B.noteworthy=noFin(B.noteworthy);
@@ -65,7 +66,7 @@ async function load(){
 
 /* ---------------- per-section models (memoised from the store) ---------------- */
 const MODEL={cache:{},get(k){return this.cache[k]||(this.cache[k]=BUILD[k]())}};
-const WORK=new Set(['chartright','ea']),TYPEN={sleep:'Sleep',chartright:'Chartright',ea:'EA',workout:'Workout',guelph:'Guelph',event:'Event'};
+const WORK=new Set(['chartright','ea','work']),TYPEN={sleep:'Sleep',chartright:'Chartright',ea:'EA',workout:'Workout',guelph:'Guelph',event:'Event',work:'Work'};
 const BUILD={
  schedule(){const S=STORE.schedule,B=STORE.briefing,day0=dnum(B.date),now=nowTor();
   const segs=S.events.map(e=>({d:dnum(e.date),s:t2m(e.start),e:t2m(e.end),type:e.type,label:e.label,notes:e.notes||'',split:e.split})).sort((a,b)=>a.d-b.d||a.s-b.s);
@@ -89,7 +90,7 @@ const BUILD={
   return {shifts:B.shifts||[],overlap:B.overlap,movements:B.movements||[],upcoming:[]
    .concat(...sc.week.map(w=>w.starts.filter(s=>WORK.has(s.type)))).filter(s=>s.d>sc.day0||s.d===sc.day0),hours:sc.wk.work,count:sc.wk.shifts}},
  day(){const B=STORE.briefing,R=/^(Reminders?\b|Due\b|Later\b)/i;return {focus:B.focus,greeting:B.greeting,workout:B.workout,cal:B.calendar_img,tasks:(B.tasks||[]).filter(t=>!R.test(t)).map(t=>t.replace(/^No due date:\s*/i,'')),generated:B.generated}},
- reminders(){const B=STORE.briefing,yr=+B.date.slice(0,4),d0=dnum(B.date);let status='';const items=[];
+ reminders(){if(isUser())return userRemindersModel();const B=STORE.briefing,yr=+B.date.slice(0,4),d0=dnum(B.date);let status='';const items=[];
   for(const t of B.tasks||[]){if(/^Reminders:/i.test(t)){status=t.replace(/^Reminders:\s*/i,'');continue}
    const m=/^(?:Reminder,?\s*|Due\s+)?([^:]+?)(?:\s*\(([^)]*)\))?:\s*(.+)$/i.exec(t);if(!/^(Reminder|Due|Later)/i.test(t)||!m)continue;
    const when=m[1].replace(/^Reminder,?\s*/i,'').trim(),dn=/later/i.test(when)?null:parseMD(when,yr);
@@ -134,9 +135,9 @@ const SEC={
    <div class="evl" style="margin-top:8px">${list.map(s=>evrow(s,s===m.next||(m.next&&s.a===m.next.a))).join('')}</div>`},
   summary(m){const n=m.next,on=n&&m.live&&n.a<=m.nowAbs;return {cls:'hero',t1:n?`${on?'Now':'Next'}: ${n.label} · ${n.range}`:'Nothing else scheduled today',
    html:`${tl(m.today,m.live?m.now.min:null)}<div class="evl">${m.todayList.filter(s=>s.type!=='sleep').slice(0,4).map(s=>evrow(s,n&&s.a===n.a)).join('')}</div>`}},
-  weekSummary(m){return {t1:`This week: ${m.wk.shifts} shifts (${hrs(m.wk.work)}), ${m.wk.workouts} workouts`,t2:`Avg sleep ${hrs(m.wk.sleepAvg)} a day${m.flags.length?` · ⚠ ${m.flags.length} short-sleep night${m.flags.length>1?'s':''}`:''}`}},
+  weekSummary(m){return {t1:`This week: ${m.wk.shifts} shifts (${hrs(m.wk.work)}), ${m.wk.workouts} workouts`,t2:`${m.wk.sleepAvg?`Avg sleep ${hrs(m.wk.sleepAvg)} a day`:isUser()?'Tap to see and edit your week':''}${m.flags.length?` · ⚠ ${m.flags.length} short-sleep night${m.flags.length>1?'s':''}`:''}`}},
   detail(m,view){const seg=`<div class="seg"><button data-view="today" class="${view!=='week'?'on':''}">Today</button><button data-view="week" class="${view==='week'?'on':''}">Week</button></div>`;
-   const src=`<p class="sm" style="margin-top:6px">Source: Cal\u2019s combined schedule (${esc(STORE.meta.schedule)}, updated ${esc((m.updated||'').replace('T',' ').slice(0,16))} UTC). Times are Ontario, 24 h.</p>`;
+   const src=isUser()?userEventsCard()+`<p class="sm" style="margin-top:6px">Times are ${esc(TZ)}, 24 h.</p>`:`<p class="sm" style="margin-top:6px">Source: Cal\u2019s combined schedule (${esc(STORE.meta.schedule)}, updated ${esc((m.updated||'').replace('T',' ').slice(0,16))} UTC). Times are Ontario, 24 h.</p>`;
    if(view==='week'){const H=22;WKB.length=0;
     return hd('schedule',`${dlab(m.day0)} – ${dlab(m.day0+6)}`)+seg+`<div class="stat3"><div><b>${m.wk.shifts}</b><span>Shifts</span></div><div><b>${hrs(m.wk.work)}</b><span>Work</span></div><div><b>${m.wk.workouts}</b><span>Workouts</span></div></div>`+
     card('Week view',`<div class="wg" style="--hh:${H}px"><div></div>${m.week.map((w,i)=>`<div class="h${i===0?' today':''}">${ddow(w.d)}<br>${new Date(w.d*864e5).getUTCDate()}</div>`).join('')}
@@ -167,8 +168,8 @@ const SEC={
   widget(a){if(!a)return `<div class="wl">🛫 Aviation</div><div class="wb sm">METAR/TAF unavailable</div>`;const wm=/Wind ([^·]+)/.exec(a.metar_decoded||'');return `<div class="wl">🛫 ${esc(a.station)}</div><div class="wb"><div><span class="cat ${esc(a.category)}">${esc(a.category)}</span></div><div class="mid" style="margin-top:8px">${esc(wm?wm[1].trim():'')}</div><div class="sm cl2">${esc((a.metar_decoded||'').split('·').slice(2,4).join('·'))}</div></div>`},
   summary(a){return a?{t1:`${a.category} at ${a.station}`,t2:(a.metar_decoded||'').split(' · ').slice(1,4).join(' · ')}:{t1:'METAR/TAF unavailable'}},
   detail(a){if(!a)return hd('aviation','Unavailable');const CATX={VFR:'Ceiling above 3,000 ft and visibility above 5 SM',MVFR:'Ceiling 1,000–3,000 ft and/or visibility 3–5 SM',IFR:'Ceiling 500–1,000 ft and/or visibility 1–3 SM',LIFR:'Ceiling below 500 ft and/or visibility below 1 SM'};
-   return hd('aviation',`${esc(a.station)} · Region of Waterloo International`)+card('Flight category',`<div style="display:flex;align-items:center;gap:10px"><span class="cat ${esc(a.category)}" style="font-size:14px;padding:4px 12px">${esc(a.category)}</span><span class="sm">${CATX[a.category]||''}</span></div>`)+
-    card('METAR',`<pre>${esc(a.metar)}</pre><div class="dec">${esc(a.metar_decoded)}</div>`)+card('TAF',`<pre>${esc(a.taf)}</pre><div class="dec">${esc(a.taf_decoded)}</div>`)+
+   return hd('aviation',`${esc(a.station)}${a.name?' · '+esc(a.name):isUser()?'':' · Region of Waterloo International'}`)+card('Flight category',`<div style="display:flex;align-items:center;gap:10px"><span class="cat ${esc(a.category)}" style="font-size:14px;padding:4px 12px">${esc(a.category)}</span><span class="sm">${CATX[a.category]||''}</span></div>`)+
+    card('METAR',`<pre>${esc(a.metar)}</pre><div class="dec">${esc(a.metar_decoded)}</div>`)+(a.taf?card('TAF',`<pre>${esc(a.taf)}</pre><div class="dec">${esc(a.taf_decoded)}</div>`):'')+
     (a.note?card('Briefing note',`<div class="note">${esc(a.note)}</div>`):'')+
     card('Categories',Object.entries(CATX).map(([k,v])=>`<div class="li"><span class="cat ${k}">${k}</span> <span class="sm">${v}</span></div>`).join(''))+
     `<a class="link" href="https://flightplanning.navcanada.ca/" target="_blank" rel="noopener">NAV CANADA flight planning ›</a>`}},
@@ -191,7 +192,7 @@ const SEC={
  reminders:{name:'Reminders',ico:'⏰',c:'#fb7185',
   widget(m){const n=m.items[0];return `<div class="wl">⏰ Reminders</div><div class="wb">${n?`<div class="mid" style="color:var(--sc)">${esc(n.days===0?'Today':n.days===1?'Tomorrow':n.when)}</div><div class="sm cl3" style="color:var(--text)">${esc(n.text)}</div>`:'<div class="sm">Nothing due</div>'}<div class="sm" style="margin-top:4px">${m.items.length} upcoming</div></div>`},
   summary(m){const n=m.items[0];return {t1:n?`${n.days===1?'Tomorrow':n.when}: ${n.text}`:'No reminders',t2:m.status||`${m.items.length} upcoming`}},
-  detail(m){const grp={};m.items.forEach(i=>{const g=i.days==null?'Later':i.days<=1?'Next 24 h':i.days<=7?'This week':'Later';(grp[g]=grp[g]||[]).push(i)});
+  detail(m){if(isUser())return userRemindersDetail(m);const grp={};m.items.forEach(i=>{const g=i.days==null?'Later':i.days<=1?'Next 24 h':i.days<=7?'This week':'Later';(grp[g]=grp[g]||[]).push(i)});
    return hd('reminders',esc(m.status||'Upcoming'))+Object.entries(grp).map(([g,xs])=>card(g,xs.map(i=>`<div class="li"><div class="k" style="color:var(--sc)">${esc(i.when)}${i.days!=null?` · in ${i.days} day${i.days===1?'':'s'}`:''}${i.flag?` · ${esc(i.flag)}`:''}</div>${esc(i.text)}</div>`).join(''))).join('')+
    '<p class="sm">From the reminders in today\u2019s public briefing. Money items are left out.</p>'}},
  inbox:{name:'Inbox',ico:'✉️',c:'#60a5fa',
@@ -221,20 +222,22 @@ const THEMES={
 let THEME=localStorage.getItem('dbw:theme')||'midnight';if(!THEMES[THEME])THEME='midnight';
 function applyTheme(){const t=THEMES[THEME][2],r=document.documentElement.style;Object.entries(t).forEach(([k,v])=>r.setProperty('--'+k,v));
  const light=THEMES[THEME][1]==='Light';r.setProperty('--sleep',light?'#6366f1':'#818cf8');const mt=document.querySelector('meta[name=theme-color]');if(mt)mt.content=t.bg}
-const settingsHTML=()=>`<div class="hd" style="--sc:var(--accent)"><div class="ico">⚙️</div><div><h2>Settings</h2><p>Colourways and data sources</p></div></div>`+
+const settingsHTML=()=>`<div class="hd" style="--sc:var(--accent)"><div class="ico">⚙️</div><div><h2>Settings</h2><p>Account, colourways and data sources</p></div></div>`+
+ accountCard()+
  card('Colourway',`<div class="cws">${Object.entries(THEMES).map(([k,[n,mode,t]])=>`<button class="cw${k===THEME?' on':''}" data-theme="${k}"><div class="sw" style="background:${t.bg}"><i style="left:8px;background:${t.accent}"></i><i style="left:30px;background:${t.accent2}"></i><i style="left:52px;background:${t.card}"></i></div><b>${n}</b><span>${mode}</span></button>`).join('')}</div>`)+
- card('Data sources',`<div class="li"><div class="k">Briefing · weather, aviation, work, day, reminders, inbox highlights, more</div>${esc(STORE.meta.briefing)} · ${esc(STORE.briefing.generated)}</div><div class="li"><div class="k">Schedule · today and week</div>${esc(STORE.meta.schedule)}</div><div class="li"><div class="k">Inbox thread list</div><span class="sample">SAMPLE DATA</span></div>`)+
+ (isUser()?card('Your setup',`<div class="li"><div class="k">Name</div>${esc(MODE.profile.name||'—')}</div><div class="li"><div class="k">Home</div>${esc(MODE.profile.city?MODE.profile.city.label:'Not set')}</div><div class="li"><div class="k">Airport</div>${esc(MODE.profile.icao||'None')}</div><div class="li"><div class="k">Sections</div>${esc((MODE.profile.sections||[]).join(', '))}</div><button class="ubtn ghost" data-ua="resetup" style="margin-top:10px">Change setup</button>`)+card('Data sources',`<div class="li"><div class="k">Weather</div>Open-Meteo (free, no account)</div><div class="li"><div class="k">METAR</div>VATSIM METAR service</div><div class="li"><div class="k">Schedule and reminders</div>${MODE.cloud?'Saved to your account':'Saved on this device (account storage isn’t switched on yet)'}</div>`):card('Data sources',`<div class="li"><div class="k">Briefing · weather, aviation, work, day, reminders, inbox highlights, more</div>${esc(STORE.meta.briefing)} · ${esc(STORE.briefing.generated)}</div><div class="li"><div class="k">Schedule · today and week</div>${esc(STORE.meta.schedule)}</div><div class="li"><div class="k">Inbox thread list</div><span class="sample">SAMPLE DATA</span></div>`))+
  card('Gestures',`<div class="li">Swipe left and right between pages</div><div class="li">Tap any widget or briefing line to open its section</div><div class="li">Swipe up from the bottom bar to close</div>`)+
- '<p class="sm">No money or financial information is shown in this app. Times are Ontario (America/Toronto), 24 h.</p>';
+ `<p class="sm">No money or financial information is shown in this app. Times are ${isUser()?esc(TZ):'Ontario (America/Toronto)'}, 24 h.</p>`;
+function accountCard(){const u=MODE.user;if(!u)return '';return card('Account',`<div class="li"><div class="k">Signed in</div>${esc(u.email||u.displayName||'Account')}</div><div class="li"><div class="k">Mode</div>${MODE.kind==='owner'?(MODE.feed?'Your crew feeds (private)':'Your crew feeds (temporary public files)'):'Personal'}</div><button class="ubtn ghost" data-ua="signout" style="margin-top:10px">Sign out</button><p class="sm">Signing out also signs you out of Logbook and Pantry on this browser.</p>`)}
 
 /* ---------------- springboard ---------------- */
 const SB={cur:+(sessionStorage.getItem('dbw:pg')||0),n:3};
 const PAGES=[{name:'Briefing'},{name:'Today',w:[['schedule','today','c2 r2'],['weather','','',],['aviation',''],['work','','c2']]},{name:'Plan',w:[['week','week','c2 r2'],['day',''],['reminders',''],['inbox',''],['more','']]}];
 const DOCK=[['schedule','today','Today','🗓️','linear-gradient(160deg,#38bdf8,#1d4ed8)'],['week','week','Week','📆','linear-gradient(160deg,#a78bfa,#6d28d9)'],['inbox','','Inbox','✉️','linear-gradient(160deg,#60a5fa,#2563eb)'],['settings','','Settings','⚙️','linear-gradient(160deg,#c8ccd2,#6b7280)']];
 const BRIEF=[['day','','summary'],['weather','','summary'],['aviation','','summary'],['work','','summary'],['reminders','','summary'],['inbox','','summary'],['more','','summary']];
-function briefingHTML(){const B=STORE.briefing,live=B.source==='live';
+function briefingHTML(){const B=STORE.briefing,live=B.source==='live'||B.source==='user';
  return `<header class="top"><div style="min-width:0"><div class="kick">✈ MyAssistant</div><h1>${esc(B.date_label.replace(/, \d{4}$/,''))}</h1><div class="sub cl2">${esc(B.greeting)}</div></div><span class="live${live?'':' snap'}">${live?'● LIVE':'SNAPSHOT'}</span></header>
- <div class="roll">${(()=>{const S=SEC.schedule,m=MODEL.get('schedule'),r=S.summary(m),w=S.weekSummary(m);
+ <div class="roll">${(()=>{if(!vis('schedule'))return '';const S=SEC.schedule,m=MODEL.get('schedule'),r=S.summary(m),w=S.weekSummary(m);
   return `<div class="ri hero" style="--sc:${S.c}"><button class="hz" data-open="schedule" data-view="today" aria-label="Schedule today: ${esc(r.t1)}"><div style="display:flex;gap:10px;align-items:center"><span class="ico">${S.ico}</span><span class="tx"><div class="src">from Schedule · Today</div><div class="t1 cl1">${esc(r.t1)}</div></span></div>${r.html}</button>
   <button class="hz wk" data-open="schedule" data-view="week" aria-label="Schedule week: ${esc(w.t1)}"><span class="tx"><div class="src">from Schedule · Week</div><div class="t1 cl1">${esc(w.t1)}</div><div class="t2 cl1">${esc(w.t2)}</div></span><span class="chev">›</span></button></div>`})()}
  ${BRIEF.map(([k,view,fn])=>{const S=SEC[k],r=S[fn](MODEL.get(k));
@@ -276,6 +279,7 @@ function closeOV(){const el=$('#ov');if(!el){OV=null;return}const src=OV.src&&do
  OV=null;document.body.classList.remove('ovopen');setTimeout(()=>{if(!OV)el.remove()},380)}
 function bindOV(el){
  el.querySelector('[data-close]').onclick=closeOV;
+ el.querySelectorAll('[data-ua]').forEach(b=>b.onclick=e=>{e.stopPropagation();userAction(b.dataset.ua,b.dataset.id,el)});
  el.querySelectorAll('.wg [data-wkb]').forEach(b=>{b.onclick=()=>wkPop(+b.dataset.wkb,el);b.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();wkPop(+b.dataset.wkb,el)}}});
  el.querySelectorAll('.ovb [data-view]').forEach(b=>b.onclick=()=>{OV.view=b.dataset.view;drawOV()});
  el.querySelectorAll('.ovb [data-open]').forEach(b=>b.onclick=()=>{OV.sec=b.dataset.open;OV.view=b.dataset.view||'';drawOV()});
@@ -288,8 +292,157 @@ function bindOV(el){
   if(p>.15||(vy>.5&&p>.04))closeOV();else{el.style.transition='transform .38s cubic-bezier(.2,1.25,.4,1),border-radius .38s';el.style.transform='none';el.style.borderRadius='0'}};
  hb.addEventListener('pointerup',end);hb.addEventListener('pointercancel',end)}
 
+/* ================= accounts (w5) =================
+   Sign-in is shared with Logbook v2 / Pantry (Firebase logbook-e784a, jwauth.js).
+   - Jackson (owner): reads his crew feeds from Firestore briefing/{uid}/feed/* (written by the box, never by this app).
+     Until the migration is done, PUBLIC_FALLBACK lets the owner keep reading the current public files.
+   - Everyone else: a clean slate. Their own profile, schedule and reminders at briefing/{uid}/user/*,
+     weather from Open-Meteo, METAR from VATSIM (both free, no key). Inbox, Work, Day and More stay hidden. */
+const CONFIG={
+ OWNER_UID:'',          // Jackson's uid once known (Firebase console > Authentication > Users)
+ PUBLIC_FALLBACK:true   // SINGLE SWITCH: set to false after migration so nothing is read from the public files any more
+};
+const MODE={kind:null,user:null,profile:null,sched:{events:[]},rem:{items:[]},cloud:null,feed:false};
+const qs=new URLSearchParams(location.search);
+if(CONFIG.PUBLIC_FALLBACK&&qs.get('owner')==='1')localStorage.setItem('dbw:owner','1');
+const uidK=n=>'dbw:u:'+(MODE.user?MODE.user.uid:'anon')+':'+n,upath=n=>`briefing/${MODE.user.uid}/user/${n}`;
+const US={
+ async get(n){let local=null;try{local=JSON.parse(localStorage.getItem(uidK(n))||'null')}catch(e){}
+  if(MODE.cloud!==false){try{const d=await JWAUTH.getDoc(upath(n));MODE.cloud=true;if(d){localStorage.setItem(uidK(n),JSON.stringify(d));return d}
+    if(local){try{await JWAUTH.setDoc(upath(n),local)}catch(e){}}return local}catch(e){if(JWAUTH.denied(e))MODE.cloud=false;console.warn('cloud get',n,e)}}
+  return local},
+ async set(n,data){data=Object.assign({},data,{updatedAt:Date.now()});localStorage.setItem(uidK(n),JSON.stringify(data));
+  if(MODE.cloud!==false){try{await JWAUTH.setDoc(upath(n),data);MODE.cloud=true}catch(e){if(JWAUTH.denied(e))MODE.cloud=false;console.warn('cloud set',n,e)}}}};
+const isUser=()=>MODE.kind==='user';
+const uid8=()=>Math.random().toString(36).slice(2,10);
+/* ---- free data sources for new users ---- */
+const WMO={0:['☀️','Clear'],1:['🌤️','Mostly clear'],2:['⛅','Partly cloudy'],3:['☁️','Overcast'],45:['🌫️','Fog'],48:['🌫️','Freezing fog'],51:['🌦️','Light drizzle'],53:['🌦️','Drizzle'],55:['🌧️','Heavy drizzle'],56:['🌧️','Freezing drizzle'],57:['🌧️','Freezing drizzle'],61:['🌦️','Light rain'],63:['🌧️','Rain'],65:['🌧️','Heavy rain'],66:['🌧️','Freezing rain'],67:['🌧️','Freezing rain'],71:['🌨️','Light snow'],73:['🌨️','Snow'],75:['❄️','Heavy snow'],77:['🌨️','Snow grains'],80:['🌦️','Showers'],81:['🌧️','Showers'],82:['⛈️','Heavy showers'],85:['🌨️','Snow showers'],86:['❄️','Snow showers'],95:['⛈️','Thunderstorms'],96:['⛈️','Thunderstorms, hail'],99:['⛈️','Thunderstorms, hail']};
+const CMP=d=>['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'][Math.round(((d%360)+360)%360/22.5)%16];
+async function fetchWeather(c){if(!c)return null;try{
+ const r=await getJSON(`https://api.open-meteo.com/v1/forecast?latitude=${c.lat}&longitude=${c.lon}&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code&timezone=auto&forecast_days=1`);
+ const cu=r.current,d=r.daily,cn=WMO[cu.weather_code]||['🌡️',''],dn=WMO[d.weather_code[0]]||cn;
+ return {location:c.label,icon:cn[0],now_c:cu.temperature_2m,now_label:`Now (${(cu.time||'').slice(11,16)})`,high_c:d.temperature_2m_max[0],low_c:d.temperature_2m_min[0],
+  conditions:`${dn[1]} today; now ${cn[1].toLowerCase()}`,wind:`${CMP(cu.wind_direction_10m)} ${Math.round(cu.wind_speed_10m)} km/h, gusts ${Math.round(cu.wind_gusts_10m)}`,precip_pct:d.precipitation_probability_max[0]??0}}catch(e){console.warn('weather',e);return null}}
+function decodeMetar(raw){const t=raw.replace(/=$/,'').split(/\s+/);let wind='',vis=null,visT='',ceil=null,sky=[],temp='',alt='',obs='';
+ for(const x of t){let m;
+  if((m=/^(\d{2})(\d{2})(\d{2})Z$/.exec(x))){const d=new Date();const u=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),+m[1],+m[2],+m[3]));obs=new Intl.DateTimeFormat('en-CA',{timeZone:TZ,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(u)}
+  else if((m=/^(\d{3}|VRB)(\d{2,3})(?:G(\d{2,3}))?(KT|MPS)$/.exec(x)))wind=m[2]==='00'?'Calm':`${m[1]==='VRB'?'Variable':m[1]+'°'} ${+m[2]} ${m[4]==='KT'?'kt':'m/s'}${m[3]?`, gusts ${+m[3]}`:''}`;
+  else if((m=/^(P)?(\d+)?(?:(\d)\/(\d))?SM$/.exec(x))&&(m[2]||m[3])){vis=(+m[2]||0)+(m[3]?m[3]/m[4]:0);visT=(m[1]?'more than ':'')+(m[2]||'')+(m[3]?(m[2]?' ':'')+m[3]+'/'+m[4]:'')+' SM'}
+  else if((m=/^(\d)\/(\d)SM$/.exec(x))){vis=m[1]/m[2];visT=x.replace('SM',' SM')}
+  else if(/^\d{4}$/.test(x)&&vis==null&&t.indexOf(x)>1){vis=+x/1609;visT=(+x>=9999?'10+ km':(+x/1000)+' km')}
+  else if((m=/^(FEW|SCT|BKN|OVC|VV)(\d{3})/.exec(x))){const ft=+m[2]*100;sky.push(`${{FEW:'Few',SCT:'Scattered',BKN:'Broken',OVC:'Overcast',VV:'Vertical vis'}[m[1]]} ${ft.toLocaleString()} ft`);if(/BKN|OVC|VV/.test(m[1])&&ceil==null)ceil=ft}
+  else if(/^(CLR|SKC|NSC|NCD|CAVOK)$/.test(x))sky.push('Sky clear');
+  else if((m=/^(M?\d{2})\/(M?\d{2})?$/.exec(x))){const f=s=>s?(s[0]==='M'?-+s.slice(1):+s):null;temp=`Temp ${f(m[1])}°C${m[2]?` / dew ${f(m[2])}°C`:''}`}
+  else if((m=/^A(\d{4})$/.exec(x)))alt=`Altimeter ${(m[1]/100).toFixed(2)} inHg`;else if((m=/^Q(\d{4})$/.exec(x)))alt=`QNH ${m[1]} hPa`;
+  else if(x==='RMK')break}
+ const v=vis??10,c=ceil??99999,cat=c<500||v<1?'LIFR':c<1000||v<3?'IFR':c<=3000||v<=5?'MVFR':'VFR';
+ return {category:cat,metar_decoded:[obs&&'Observed '+obs,wind&&'Wind '+wind,visT&&'Visibility '+visT,sky.join(', '),temp,alt].filter(Boolean).join(' · ')}}
+async function fetchMetar(icao){if(!icao)return null;try{const r=await getJSON(`https://metar.vatsim.net/${encodeURIComponent(icao)}?format=json`);const m=r&&r[0]&&r[0].metar;if(!m)return null;
+ const raw=(m.startsWith(icao)?'':icao+' ')+m,d=decodeMetar(raw);return {station:icao,name:MODE.profile&&MODE.profile.icaoName||'',category:d.category,metar:raw,metar_decoded:d.metar_decoded,taf:'',taf_decoded:'',note:''}}catch(e){console.warn('metar',e);return null}}
+/* ---- a new user's schedule: their own events (one-off or repeating) expanded into schedule.json shape ---- */
+function expandEvents(evs,d0,days){const out=[];for(const e of evs){for(let d=d0-1;d<d0+days;d++){const iso=diso(d),dw=new Date(d*864e5).getUTCDay(),ed=dnum(e.date);if(d<ed)continue;
+  const hit=e.repeat==='daily'||(e.repeat==='weekdays'&&dw>0&&dw<6)||(e.repeat==='weekly'&&(d-ed)%7===0)||(!e.repeat&&d===ed);if(!hit)continue;
+  const s=t2m(e.start),z=t2m(e.end),base={type:e.type,label:e.label||TYPEN[e.type]||'Event',notes:e.notes||'',id:e.id};
+  if(z>s)out.push(Object.assign({date:iso,start:e.start,end:e.end},base));else{out.push(Object.assign({date:iso,start:e.start,end:'24:00'},base));out.push(Object.assign({date:diso(d+1),start:'00:00',end:e.end},base))}}}
+ return out}
+function todayLabel(){return new Intl.DateTimeFormat('en-CA',{timeZone:TZ,weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(new Date()).replace(/^(\w+), /,'$1, ')}
+async function loadUser(){const P=MODE.profile;TZ=(P.city&&P.city.tz)||Intl.DateTimeFormat().resolvedOptions().timeZone||'America/Toronto';
+ const n=nowTor(),h=Math.floor(n.min/60),greet=(h<12?'Morning':h<18?'Afternoon':'Evening')+(P.name?', '+P.name:'')+'.';
+ const want=k=>(P.sections||[]).includes(k);
+ const [wx,av]=await Promise.all([want('weather')?fetchWeather(P.city):null,want('aviation')?fetchMetar(P.icao):null]);
+ STORE.briefing={date:n.iso,date_label:todayLabel(),greeting:greet,generated:'Updated '+m2t(n.min),weather:wx,aviation:av,shifts:[],overlap:false,movements:[],workout:null,tasks:[],noteworthy:[],focus:'',sixers:null,prospects:[],source:'user'};
+ STORE.schedule={timezone:TZ,updated:new Date().toISOString(),events:expandEvents(MODE.sched.events||[],dnum(n.iso),14)};
+ STORE.meta={briefing:'Your sources: '+[wx&&'Open-Meteo weather',av&&'VATSIM METAR'].filter(Boolean).join(', ')||'Your sources',schedule:'Your own events'};STORE.archive=[];MODEL.cache={}}
+/* ---- which sections a new user sees ---- */
+const USER_SECS=[['schedule','Schedule','🗓️'],['weather','Weather','🌤️'],['aviation','Aviation (METAR)','🛫'],['reminders','Reminders','⏰']];
+const vis=k=>{if(!isUser())return true;const s=SECK(k);if(['work','inbox','more','day'].includes(s))return false;if(s==='aviation'&&!MODE.profile.icao)return false;return (MODE.profile.sections||[]).includes(s)};
+function applyVisibility(){if(!isUser())return;PAGES.forEach(p=>{if(p.w)p.w=p.w.filter(x=>vis(x[0]))});for(let i=PAGES.length-1;i>0;i--)if(!PAGES[i].w.length)PAGES.splice(i,1);
+ if(vis('reminders')&&!PAGES.some(p=>p.w&&p.w.some(x=>x[0]==='reminders')))(PAGES[1]||PAGES[0]).w&&PAGES[PAGES.length-1].w.push(['reminders','']);
+ for(let i=DOCK.length-1;i>=0;i--)if(DOCK[i][0]!=='settings'&&!vis(DOCK[i][0]))DOCK.splice(i,1);
+ if(vis('reminders')&&!DOCK.some(d=>d[0]==='reminders'))DOCK.splice(DOCK.length-1,0,['reminders','','Reminders','⏰','linear-gradient(160deg,#fb7185,#be123c)']);
+ for(let i=BRIEF.length-1;i>=0;i--)if(!vis(BRIEF[i][0]))BRIEF.splice(i,1)}
+/* ---- editing sheets (new users) ---- */
+function usheet(html,bind){const bg=document.createElement('div');bg.className='usheet';bg.innerHTML=`<div class="ub" role="dialog" aria-modal="true">${html}</div>`;bg.onclick=e=>{if(e.target===bg)bg.remove()};document.body.appendChild(bg);bind&&bind(bg.querySelector('.ub'),()=>bg.remove())}
+const ETYPES=[['work','Work'],['workout','Workout'],['event','Event'],['sleep','Sleep']],REP=[['','Once'],['daily','Every day'],['weekdays','Weekdays'],['weekly','Weekly']];
+function eventSheet(id){const ev=(MODE.sched.events||[]).find(e=>e.id===id)||{id:null,type:'event',label:'',date:nowTor().iso,start:'09:00',end:'10:00',repeat:'',notes:''};
+ usheet(`<h3>${ev.id?'Edit event':'Add event'}</h3><label>Name<input id="ue_l" value="${esc(ev.label)}" placeholder="e.g. Work, Gym, Class"></label>
+ <label>Type<select id="ue_t">${ETYPES.map(([k,n])=>`<option value="${k}" ${k===ev.type?'selected':''}>${n}</option>`).join('')}</select></label>
+ <div class="ur"><label>Date<input id="ue_d" type="date" value="${esc(ev.date)}"></label><label>Repeats<select id="ue_r">${REP.map(([k,n])=>`<option value="${k}" ${k===(ev.repeat||'')?'selected':''}>${n}</option>`).join('')}</select></label></div>
+ <div class="ur"><label>Start<input id="ue_s" type="time" value="${esc(ev.start)}"></label><label>End<input id="ue_e" type="time" value="${esc(ev.end)}"></label></div>
+ <label>Notes<input id="ue_n" value="${esc(ev.notes||'')}" placeholder="Optional"></label><p class="uerr" id="ue_x"></p>
+ <div class="ur"><button class="ubtn" id="ue_ok">Save</button>${ev.id?'<button class="ubtn ghost danger" id="ue_del">Delete</button>':'<button class="ubtn ghost" id="ue_c">Cancel</button>'}</div>`,(el,close)=>{const g=s=>el.querySelector(s);
+  g('#ue_ok').onclick=async()=>{const v={id:ev.id||uid8(),label:g('#ue_l').value.trim(),type:g('#ue_t').value,date:g('#ue_d').value,start:g('#ue_s').value,end:g('#ue_e').value,repeat:g('#ue_r').value,notes:g('#ue_n').value.trim()};
+   if(!v.date||!v.start||!v.end){g('#ue_x').textContent='Pick a date, start and end.';return}if(v.start===v.end){g('#ue_x').textContent='Start and end can’t be the same.';return}
+   const l=(MODE.sched.events||[]).filter(e=>e.id!==v.id);l.push(v);MODE.sched={events:l};close();await US.set('schedule',MODE.sched);await refreshUser()};
+  g('#ue_c')&&(g('#ue_c').onclick=close);
+  g('#ue_del')&&(g('#ue_del').onclick=async()=>{MODE.sched={events:(MODE.sched.events||[]).filter(e=>e.id!==ev.id)};close();await US.set('schedule',MODE.sched);await refreshUser()})})}
+async function refreshUser(){await loadUser();render()}
+function userEventsCard(){const l=(MODE.sched.events||[]).slice().sort((a,b)=>a.start.localeCompare(b.start));
+ return card('Your events',`${l.length?l.map(e=>`<button class="li ue" data-ua="ev" data-id="${esc(e.id)}"><div class="k" style="color:var(--${e.type in TYPEN?e.type:'event'})">${esc(TYPEN[e.type]||'Event')} · ${esc(e.start)}–${esc(e.end)} · ${esc((REP.find(r=>r[0]===(e.repeat||''))||REP[0])[1])}${e.repeat?'':' · '+esc(dlab(dnum(e.date)))}</div>${esc(e.label||TYPEN[e.type])}</button>`).join(''):'<div class="sm">Nothing yet. Add your work, classes, workouts and plans.</div>'}
+ <button class="ubtn" data-ua="addev" style="margin-top:10px">＋ Add event</button>`)}
+function userRemindersDetail(m){const done=(MODE.rem.items||[]).filter(i=>i.done);
+ return hd('reminders',`${m.items.length} upcoming`)+card('Add a reminder',`<input class="uin" id="ur_t" placeholder="What do you need to remember?"><div class="ur"><input class="uin" id="ur_d" type="date"><button class="ubtn" data-ua="addrem">Add</button></div>`)+
+  (m.items.length?card('Upcoming',m.items.map(i=>`<div class="li urm"><button class="uck" data-ua="remdone" data-id="${esc(i.id)}" aria-label="Mark done">○</button><div><div class="k" style="color:var(--sc)">${esc(i.when)}${i.days!=null&&i.days>=0?` · ${i.days===0?'today':i.days===1?'tomorrow':'in '+i.days+' days'}`:i.days!=null?' · overdue':''}</div>${esc(i.text)}</div><button class="uck x" data-ua="remdel" data-id="${esc(i.id)}" aria-label="Delete">✕</button></div>`).join('')):'')+
+  (done.length?card('Done',done.slice(-10).reverse().map(i=>`<div class="li urm"><button class="uck on" data-ua="remundo" data-id="${esc(i.id)}" aria-label="Not done">✓</button><div class="muted">${esc(i.text)}</div><button class="uck x" data-ua="remdel" data-id="${esc(i.id)}" aria-label="Delete">✕</button></div>`).join('')):'')+
+  `<p class="sm">${MODE.cloud?'Saved to your account.':'Saved on this device.'}</p>`}
+function userRemindersModel(){const d0=dnum(nowTor().iso);const items=(MODE.rem.items||[]).filter(i=>!i.done).map(i=>{const dn=i.date?dnum(i.date):null;return {id:i.id,text:i.text,dn,days:dn==null?null:dn-d0,when:dn==null?'Later':dlab(dn),flag:''}}).sort((a,b)=>(a.dn??1e9)-(b.dn??1e9));return {status:'',items}}
+async function userAction(a,id,el){const R=MODE.rem.items=MODE.rem.items||[];
+ if(a==='ev')return eventSheet(id);if(a==='addev')return eventSheet(null);
+ if(a==='addrem'){const t=el.querySelector('#ur_t').value.trim(),d=el.querySelector('#ur_d').value;if(!t)return;R.push({id:uid8(),text:t,date:d||null,done:false,at:Date.now()})}
+ else if(a==='remdone'||a==='remundo'){const x=R.find(i=>i.id===id);if(x)x.done=a==='remdone'}
+ else if(a==='remdel'){MODE.rem.items=R.filter(i=>i.id!==id)}
+ else if(a==='resetup')return onboarding(true);
+ else if(a==='signout'){await JWAUTH.signOut();localStorage.removeItem('dbw:owner');location.reload();return}
+ else return;
+ await US.set('reminders',MODE.rem);MODEL.cache={};drawOV()}
+/* ---- first-run questions ---- */
+function onboarding(again){const P=MODE.profile||{};const o={step:0,name:P.name||((MODE.user&&MODE.user.displayName)||'').split(' ')[0],city:P.city||null,icao:P.icao||'',icaoName:P.icaoName||'',sched:P.schedType||'',secs:(P.sections||['schedule','weather','reminders']).slice(),res:[],err:''};
+ return new Promise(done=>{let el=document.createElement('div');el.id='uonb';el.className='uonb';document.body.appendChild(el);const N=5;
+ const draw=()=>{const st=o.step;let h,sub,f;
+  if(st===0){h='Welcome to MyAssistant';sub='Your day, weather and schedule in one place. A few quick questions to set it up.';f=`<label>What should we call you?<input id="uo_n" value="${esc(o.name)}" placeholder="First name" autocomplete="given-name"></label>`}
+  else if(st===1){h='Where are you based?';sub='For your local weather and time zone.';f=`<div class="ur"><input class="uin" id="uo_c" placeholder="City, e.g. Waterloo" value="${esc(o.cq||'')}"><button class="ubtn" id="uo_cs">Search</button></div>${o.city?`<div class="upick on">✓ ${esc(o.city.label)}</div>`:''}${o.res.map((r,i)=>`<button class="upick" data-ci="${i}">${esc(r.label)}</button>`).join('')}`}
+  else if(st===2){h='Home airport?';sub='Optional. Adds live METAR for a 4-letter ICAO code, like CYKF or KJFK.';f=`<input class="uin" id="uo_a" value="${esc(o.icao)}" placeholder="ICAO code (optional)" maxlength="4" autocapitalize="characters" style="text-transform:uppercase">`}
+  else if(st===3){h='How does your week work?';sub='We’ll start your schedule from this. You can change anything later.';f=[['shift','Shift work','I’ll add my shifts as they come'],['9to5','Mon–Fri, 9 to 5','Adds a repeating weekday work block'],['student','Student','I’ll add my classes'],['flex','Flexible','Nothing fixed']].map(([k,n,d])=>`<button class="upick ${o.sched===k?'on':''}" data-sc="${k}"><b>${n}</b><span>${d}</span></button>`).join('')}
+  else{h='What should Home show?';sub='Pick the sections you want. Change it any time in Settings.';f=`<div class="uchips">${USER_SECS.filter(([k])=>k!=='aviation'||o.icao).map(([k,n,i])=>`<button class="uchip ${o.secs.includes(k)?'on':''}" data-se="${k}">${i} ${n}</button>`).join('')}</div>`}
+  el.innerHTML=`<div class="ui"><div class="ustep">Setup · ${st+1} of ${N}</div><h1>${h}</h1><p>${sub}</p>${f}<p class="uerr">${esc(o.err)}</p><div class="ur"><button class="ubtn ghost" id="uo_b">${st?'Back':again?'Cancel':'Skip'}</button><button class="ubtn" id="uo_x">${st===N-1?'Finish':'Continue'}</button></div></div>`;
+  const g=s=>el.querySelector(s);o.err='';
+  const grab=()=>{if(g('#uo_n'))o.name=g('#uo_n').value.trim();if(g('#uo_a'))o.icao=g('#uo_a').value.trim().toUpperCase();if(g('#uo_c'))o.cq=g('#uo_c').value.trim()};
+  g('#uo_cs')&&(g('#uo_cs').onclick=async()=>{grab();if(!o.cq)return;try{const r=await getJSON(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(o.cq.split(',')[0])}&count=8&language=en&format=json`);o.res=(r.results||[]).map(x=>({label:[x.name,x.admin1,x.country].filter(Boolean).join(', '),lat:x.latitude,lon:x.longitude,tz:x.timezone}));if(!o.res.length)o.err='No places found. Try another spelling.'}catch(e){o.err='Couldn’t search right now.'}draw()});
+  g('#uo_c')&&(g('#uo_c').onkeydown=e=>{if(e.key==='Enter')g('#uo_cs').click()});
+  el.querySelectorAll('[data-ci]').forEach(b=>b.onclick=()=>{o.city=o.res[+b.dataset.ci];o.res=[];draw()});
+  el.querySelectorAll('[data-sc]').forEach(b=>b.onclick=()=>{o.sched=b.dataset.sc;draw()});
+  el.querySelectorAll('[data-se]').forEach(b=>b.onclick=()=>{const k=b.dataset.se,i=o.secs.indexOf(k);i<0?o.secs.push(k):o.secs.splice(i,1);draw()});
+  g('#uo_b').onclick=()=>{grab();if(o.step)o.step--,draw();else if(again){el.remove();done(false)}else finish(true)};
+  g('#uo_x').onclick=async()=>{grab();
+   if(o.step===2&&o.icao){if(!/^[A-Z0-9]{4}$/.test(o.icao)){o.err='ICAO codes are 4 letters, like CYKF.';return draw()}g('#uo_x').textContent='Checking…';const m=await fetchMetar(o.icao);if(!m){o.err=`No METAR found for ${o.icao}. Check the code or leave it blank.`;return draw()}if(!o.secs.includes('aviation'))o.secs.push('aviation')}
+   if(o.step===2&&!o.icao)o.secs=o.secs.filter(k=>k!=='aviation');
+   if(o.step<N-1){o.step++;draw()}else finish(false)};
+  const f0=el.querySelector('input');if(f0&&matchMedia('(pointer:fine)').matches)f0.focus()};
+ const finish=async skipped=>{const p=Object.assign({},MODE.profile||{},{name:o.name,city:o.city,icao:o.icao,schedType:o.sched||'flex',sections:o.secs.length?o.secs:['schedule'],onboarded:true,skipped:!!skipped,at:Date.now()});
+  MODE.profile=p;await US.set('profile',p);
+  if(o.sched==='9to5'&&!(MODE.sched.events||[]).some(e=>e.seed)){MODE.sched={events:(MODE.sched.events||[]).concat([{id:uid8(),seed:true,label:'Work',type:'work',date:nowTor().iso,start:'09:00',end:'17:00',repeat:'weekdays',notes:''}])};await US.set('schedule',MODE.sched)}
+  el.remove();done(true)};
+ draw()})}
+/* ---- owner detection + boot ---- */
+async function readFeed(u){try{const f=await JWAUTH.getCol(`briefing/${u.uid}/feed`);return f&&f.briefing&&f.briefing.data?f:null}catch(e){if(!JWAUTH.denied(e))console.warn('feed',e);return null}}
+async function loadFeed(f){STORE.briefing=f.briefing.data;STORE.briefing.source='live';STORE.meta.briefing='Live: your crew feed ('+(f.briefing.date||STORE.briefing.date)+')';
+ STORE.schedule=f.schedule&&f.schedule.data||{events:[],updated:''};STORE.meta.schedule='Live: Cal\u2019s schedule feed';STORE.meta.scheduleUpdated=STORE.schedule.updated;
+ STORE.archive=(f.archive&&f.archive.days)||[{date:STORE.briefing.date,label:STORE.briefing.date_label,focus:STORE.briefing.focus}];const B=STORE.briefing;B.tasks=noFin(B.tasks);B.noteworthy=noFin(B.noteworthy);MODEL.cache={}}
+async function start(u){MODE.user=u;$('#app').innerHTML='<div class="boot">Loading MyAssistant…</div>';
+ const feed=await readFeed(u),ownerUid=CONFIG.OWNER_UID&&u.uid===CONFIG.OWNER_UID;
+ if(feed){MODE.kind='owner';MODE.feed=true;await loadFeed(feed)}
+ else if(CONFIG.PUBLIC_FALLBACK&&(ownerUid||localStorage.getItem('dbw:owner')==='1')){MODE.kind='owner';await load()}
+ else if(ownerUid){MODE.kind='owner';$('#app').innerHTML='<div class="boot">Your crew feed hasn’t been published to your account yet.</div>';return}
+ else{MODE.kind='user';const [p,s,r]=await Promise.all([US.get('profile'),US.get('schedule'),US.get('reminders')]);MODE.profile=p;MODE.sched=s||{events:[]};MODE.rem=r||{items:[]};
+  if(!p||!p.onboarded){await onboarding(false)}await loadUser();applyVisibility()}
+ render();
+ if(qs.get('open')){const s=SECK(qs.get('open'));if((SEC[s]&&vis(s))||s==='settings'){OV={sec:s,view:qs.get('view')||(qs.get('open')==='week'?'week':'')};drawOV();document.body.classList.add('ovopen')}}
+ setInterval(async()=>{if(!OV){if(isUser())await loadUser();else MODEL.cache={};render()}},isUser()?600000:60000)}
+function boot(){applyTheme();JWAUTH.ready().then(u=>{if(u)return start(u);$('#app').innerHTML='';
+  JWAUTH.gate({title:'MyAssistant',icon:'icons/icon-180.png',sub:'Your daily briefing and schedule. Sign in to start with a clean slate, or to see your own feeds.',note:'Same account as Logbook and Pantry.',onUser:start})})
+ .catch(e=>{console.error(e);$('#app').innerHTML='<div class="boot">Couldn\u2019t load sign-in. Check your connection and reopen.</div>'})}
+
 /* ---------------- boot ---------------- */
-load().then(()=>{render();const q=new URLSearchParams(location.search);if(q.get('open')){const s=SECK(q.get('open'));if(SEC[s]||s==='settings'){OV={sec:s,view:q.get('view')||(q.get('open')==='week'?'week':'')};drawOV();document.body.classList.add('ovopen')}}
- setInterval(()=>{if(!OV){MODEL.cache={};render()}},60000)}).catch(e=>{console.error(e);$('#app').innerHTML='<div class="boot">Couldn\u2019t load the briefing.</div>'});
-window.__DBW={STORE,MODEL,SEC};
+boot();
+window.__DBW={STORE,MODEL,SEC,MODE,CONFIG,decodeMetar,expandEvents};
 })();

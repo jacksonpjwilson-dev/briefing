@@ -1,4 +1,4 @@
-/* Daily Briefing · widget home (preview)
+/* MyAssistant · daily briefing + schedule, widget home (preview)
    Architecture: ONE shared STORE (briefing slice + schedule slice). Each SECTION reads its slice and owns
    widget(), summary() and detail(). The Briefing page is built only from section summaries. */
 (()=>{
@@ -233,7 +233,7 @@ const PAGES=[{name:'Briefing'},{name:'Today',w:[['schedule','today','c2 r2'],['w
 const DOCK=[['schedule','today','Today','🗓️','linear-gradient(160deg,#38bdf8,#1d4ed8)'],['week','week','Week','📆','linear-gradient(160deg,#a78bfa,#6d28d9)'],['inbox','','Inbox','✉️','linear-gradient(160deg,#60a5fa,#2563eb)'],['settings','','Settings','⚙️','linear-gradient(160deg,#c8ccd2,#6b7280)']];
 const BRIEF=[['day','','summary'],['weather','','summary'],['aviation','','summary'],['work','','summary'],['reminders','','summary'],['inbox','','summary'],['more','','summary']];
 function briefingHTML(){const B=STORE.briefing,live=B.source==='live';
- return `<header class="top"><div style="min-width:0"><div class="kick">✈ Daily Briefing</div><h1>${esc(B.date_label.replace(/, \d{4}$/,''))}</h1><div class="sub cl2">${esc(B.greeting)}</div></div><span class="live${live?'':' snap'}">${live?'● LIVE':'SNAPSHOT'}</span></header>
+ return `<header class="top"><div style="min-width:0"><div class="kick">✈ MyAssistant</div><h1>${esc(B.date_label.replace(/, \d{4}$/,''))}</h1><div class="sub cl2">${esc(B.greeting)}</div></div><span class="live${live?'':' snap'}">${live?'● LIVE':'SNAPSHOT'}</span></header>
  <div class="roll">${(()=>{const S=SEC.schedule,m=MODEL.get('schedule'),r=S.summary(m),w=S.weekSummary(m);
   return `<div class="ri hero" style="--sc:${S.c}"><button class="hz" data-open="schedule" data-view="today" aria-label="Schedule today: ${esc(r.t1)}"><div style="display:flex;gap:10px;align-items:center"><span class="ico">${S.ico}</span><span class="tx"><div class="src">from Schedule · Today</div><div class="t1 cl1">${esc(r.t1)}</div></span></div>${r.html}</button>
   <button class="hz wk" data-open="schedule" data-view="week" aria-label="Schedule week: ${esc(w.t1)}"><span class="tx"><div class="src">from Schedule · Week</div><div class="t1 cl1">${esc(w.t1)}</div><div class="t2 cl1">${esc(w.t2)}</div></span><span class="chev">›</span></button></div>`})()}

@@ -205,7 +205,7 @@ const THEMES={
  paper:['Paper','Light',{bg:'#f6f1e7',bg2:'#fffaf0',card:'#fffdf8',card2:'#f3ecdf',text:'#2a2118',muted:'#7a6b58',line:'rgba(42,33,24,.1)',accent:'#b45309',accent2:'#0f766e',glass:'rgba(255,253,248,.65)'}]};
 let THEME=localStorage.getItem('dbw:theme')||'midnight';if(!THEMES[THEME])THEME='midnight';
 function applyTheme(){const t=THEMES[THEME][2],r=document.documentElement.style;Object.entries(t).forEach(([k,v])=>r.setProperty('--'+k,v));
- const light=THEMES[THEME][1]==='Light';r.setProperty('--sleep',light?'#6366f1':'#818cf8');if(mt)mt.content=t.bg}
+ const light=THEMES[THEME][1]==='Light';r.setProperty('--sleep',light?'#6366f1':'#818cf8');const mt=document.querySelector('meta[name=theme-color]');if(mt)mt.content=t.bg}
 const settingsHTML=()=>`<div class="hd" style="--sc:var(--accent)"><div class="ico">⚙️</div><div><h2>Settings</h2><p>Colourways and data sources</p></div></div>`+
  card('Colourway',`<div class="cws">${Object.entries(THEMES).map(([k,[n,mode,t]])=>`<button class="cw${k===THEME?' on':''}" data-theme="${k}"><div class="sw" style="background:${t.bg}"><i style="left:8px;background:${t.accent}"></i><i style="left:30px;background:${t.accent2}"></i><i style="left:52px;background:${t.card}"></i></div><b>${n}</b><span>${mode}</span></button>`).join('')}</div>`)+
  card('Data sources',`<div class="li"><div class="k">Briefing · weather, aviation, work, day, reminders, inbox highlights, more</div>${esc(STORE.meta.briefing)} · ${esc(STORE.briefing.generated)}</div><div class="li"><div class="k">Schedule · today and week</div>${esc(STORE.meta.schedule)}</div><div class="li"><div class="k">Inbox thread list</div><span class="sample">SAMPLE DATA</span></div>`)+

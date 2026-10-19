@@ -115,7 +115,7 @@ const WKB=[];
 const endT=z=>z%1440===0?'24:00':m2t(z);
 function wkBlk(s,d,H){const px=(s.ce-s.cs)/60*H,from=s.a<d*1440,cont=s.z>(d+1)*1440,sl=s.type==='sleep',ty=s.type in TYPEN?s.type:'event';
  const st=(from?'↑':'')+m2t(s.a),en=endT(s.z)+(cont?'↓':'');let L=[];
- if(px>=36)L=sl?[st,en]:[[TYPEN[ty],px>=48?'wr':''],st,en];else if(px>=33)L=[st,en];else if(px>=13)L=[from?'…'+en:st];
+ if(px>=36)L=[[TYPEN[ty],px>=48?'wr':''],st,en];else if(px>=33)L=[st,en];else if(px>=13)L=[from?'…'+en:st];
  const id=WKB.push({s,d})-1,lab=`${TYPEN[ty]}${s.label&&s.label!==TYPEN[ty]?' '+s.label:''}, ${dlab(Math.floor(s.a/1440))} ${m2t(s.a)} to ${endT(s.z)}`;
  return `<i role="button" tabindex="0" data-wkb="${id}" aria-label="${esc(lab)}" class="${sl?'sl':''}${px<13?' tiny':''}" style="top:${s.cs/60*H}px;height:${Math.max(3,px)}px;background:var(--${ty})">${L.map(x=>Array.isArray(x)?`<em class="${x[1]}">${x[1]?esc(x[0]).replace('Chartright','Chart&shy;right').replace('Workout','Work&shy;out'):esc(x[0])}</em>`:`<span>${esc(x)}</span>`).join('')}</i>`}
 function wkPop(id,ov){const b=WKB[id];if(!b)return;const s=b.s,ty=s.type in TYPEN?s.type:'event',d1=Math.floor(s.a/1440),d2=Math.floor((s.z-1)/1440);

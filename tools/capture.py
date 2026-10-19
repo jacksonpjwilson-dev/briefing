@@ -11,7 +11,7 @@ async def main():
   async with async_playwright() as p:
     b = await p.chromium.launch(executable_path="/usr/bin/google-chrome", args=["--disable-dev-shm-usage"])
     ctx = await b.new_context(viewport={"width":393,"height":852}, device_scale_factor=3, is_mobile=True, has_touch=True)
-    pg = await ctx.new_page(); errs=[]; pg.on("pageerror", lambda e: errs.append(str(e)))
+    pg = await ctx.new_page(); errs=[]; pg.on("pageerror", lambda e: errs.append(str(e)+" @ "+pg.url+" "+(e.stack or "")[:300]))
     async def go(q="", theme=None):
       await pg.goto(BASE+q, wait_until="networkidle"); await pg.wait_for_timeout(600)
       if theme: await pg.evaluate("t=>{localStorage.setItem('dbw:theme',t)}", theme); await pg.reload(wait_until="networkidle"); await pg.wait_for_timeout(600)

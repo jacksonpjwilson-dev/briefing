@@ -110,6 +110,20 @@ const hd=(k,sub)=>`<div class="hd" style="--sc:${SEC[k].c}"><div class="ico">${S
 const card=(t,b,tag='')=>`<div class="card"><h3>${t}${tag?`<span class="tag">${tag}</span>`:''}</h3>${b}</div>`;
 const xlink=(k,txt,view)=>`<button class="link" data-open="${k}"${view?` data-view="${view}"`:''}>${txt} ›</button>`;
 
+/* week-grid blocks: name + start + end, sized to fit; every block is tappable (popover with full details) */
+const WKB=[];
+const endT=z=>z%1440===0?'24:00':m2t(z);
+function wkBlk(s,d,H){const px=(s.ce-s.cs)/60*H,from=s.a<d*1440,cont=s.z>(d+1)*1440,sl=s.type==='sleep',ty=s.type in TYPEN?s.type:'event';
+ const st=(from?'↑':'')+m2t(s.a),en=endT(s.z)+(cont?'↓':'');let L=[];
+ if(px>=36)L=sl?[st,en]:[[TYPEN[ty],px>=48?'wr':''],st,en];else if(px>=33)L=[st,en];else if(px>=13)L=[from?'…'+en:st];
+ const id=WKB.push({s,d})-1,lab=`${TYPEN[ty]}${s.label&&s.label!==TYPEN[ty]?' '+s.label:''}, ${dlab(Math.floor(s.a/1440))} ${m2t(s.a)} to ${endT(s.z)}`;
+ return `<i role="button" tabindex="0" data-wkb="${id}" aria-label="${esc(lab)}" class="${sl?'sl':''}${px<13?' tiny':''}" style="top:${s.cs/60*H}px;height:${Math.max(3,px)}px;background:var(--${ty})">${L.map(x=>Array.isArray(x)?`<em class="${x[1]}">${x[1]?esc(x[0]).replace('Chartright','Chart&shy;right').replace('Workout','Work&shy;out'):esc(x[0])}</em>`:`<span>${esc(x)}</span>`).join('')}</i>`}
+function wkPop(id,ov){const b=WKB[id];if(!b)return;const s=b.s,ty=s.type in TYPEN?s.type:'event',d1=Math.floor(s.a/1440),d2=Math.floor((s.z-1)/1440);
+ const when=d1===d2?`${dlab(d1)}`:`${dlab(d1)} → ${dlab(d2)}`;
+ let p=ov.querySelector('.wkpop');if(p)p.remove();p=document.createElement('div');p.className='wkpop';
+ p.innerHTML=`<div class="wkp" role="dialog" aria-label="${esc(TYPEN[ty])} details" style="--ec:var(--${ty})"><div class="k"><span class="dot"></span>${esc(TYPEN[ty])}</div><b>${esc(s.label||TYPEN[ty])}</b><div class="tm">${m2t(s.a)}–${endT(s.z)}${d2>d1?' <small>(+1)</small>':''}</div><div class="sm">${esc(when)} · ${hrs(s.z-s.a)}${b.d!==d1?` · continued from ${ddow(d1)}`:''}</div>${s.notes?`<div class="sm nt">${esc(s.notes)}</div>`:''}<button class="done">Done</button></div>`;
+ p.onclick=e=>{if(e.target===p||e.target.closest('.done'))p.remove()};ov.appendChild(p);p.querySelector('.done').focus({preventScroll:true})}
+
 const SEC={
  schedule:{name:'Schedule',ico:'🗓️',c:'#38bdf8',
   widget(m,view){if(view==='week'){return `<div class="wl">🗓️ This week<span class="tag muted">${m.wk.shifts} shifts · ${m.wk.workouts} workouts</span></div><div class="wkm">${m.week.map((w,i)=>`<div class="d${i===0?' today':''}"><small>${ddow(w.d).slice(0,2)} ${new Date(w.d*864e5).getUTCDate()}</small><div class="col">${w.segs.map(s=>`<i style="top:${s.cs/14.4}%;height:${(s.ce-s.cs)/14.4}%;background:var(--${s.type})"></i>`).join('')}</div></div>`).join('')}</div>`}
@@ -123,11 +137,12 @@ const SEC={
   weekSummary(m){return {t1:`This week: ${m.wk.shifts} shifts (${hrs(m.wk.work)}), ${m.wk.workouts} workouts`,t2:`Avg sleep ${hrs(m.wk.sleepAvg)} a day${m.flags.length?` · ⚠ ${m.flags.length} short-sleep night${m.flags.length>1?'s':''}`:''}`}},
   detail(m,view){const seg=`<div class="seg"><button data-view="today" class="${view!=='week'?'on':''}">Today</button><button data-view="week" class="${view==='week'?'on':''}">Week</button></div>`;
    const src=`<p class="sm" style="margin-top:6px">Source: Cal\u2019s combined schedule (${esc(STORE.meta.schedule)}, updated ${esc((m.updated||'').replace('T',' ').slice(0,16))} UTC). Times are Ontario, 24 h.</p>`;
-   if(view==='week'){const H=18;
+   if(view==='week'){const H=22;WKB.length=0;
     return hd('schedule',`${dlab(m.day0)} – ${dlab(m.day0+6)}`)+seg+`<div class="stat3"><div><b>${m.wk.shifts}</b><span>Shifts</span></div><div><b>${hrs(m.wk.work)}</b><span>Work</span></div><div><b>${m.wk.workouts}</b><span>Workouts</span></div></div>`+
-    card('Week view',`<div class="wg"><div></div>${m.week.map((w,i)=>`<div class="h${i===0?' today':''}">${ddow(w.d)}<br>${new Date(w.d*864e5).getUTCDate()}</div>`).join('')}
-     <div class="ax" style="height:${24*H}px">${[0,6,12,18,24].map(h=>`<span style="top:${h*H}px">${String(h).padStart(2,'0')}</span>`).join('')}</div>
-     ${m.week.map((w,i)=>`<div class="col${i===0?' today':''}" style="height:${24*H}px">${w.segs.map(s=>`<i style="top:${s.cs/60*H}px;height:${(s.ce-s.cs)/60*H}px;background:var(--${s.type})">${(s.ce-s.cs)>=150&&s.type!=='sleep'?esc(TYPEN[s.type]):''}</i>`).join('')}</div>`).join('')}</div>
+    card('Week view',`<div class="wg" style="--hh:${H}px"><div></div>${m.week.map((w,i)=>`<div class="h${i===0?' today':''}">${ddow(w.d)}<br>${new Date(w.d*864e5).getUTCDate()}</div>`).join('')}
+     <div class="ax" style="height:${24*H}px">${[0,3,6,9,12,15,18,21,24].map(h=>`<span class="${h===0?'f':h===24?'l':''}" style="top:${h*H}px">${String(h).padStart(2,'0')}:00</span>`).join('')}</div>
+     ${m.week.map((w,i)=>`<div class="col${i===0?' today':''}" style="height:${24*H}px">${w.segs.map(s=>wkBlk(s,w.d,H)).join('')}</div>`).join('')}</div>
+     <p class="sm wkhint">Tap any block for its full times. ↑ continues from the day before · ↓ continues past midnight.</p>
      <div class="legend">${Object.keys(TYPEN).map(t=>`<span style="--ec:var(--${t})">${TYPEN[t]}</span>`).join('')}</div>`)+
     (m.flags.length?card('⚠ Sleep flags',m.flags.map(f=>`<div class="li">${esc(f)}</div>`).join('')):'')+
     card('Day by day',m.week.map((w,i)=>`<div class="dayrow${i===0?' today':''}"><h4>${dlab(w.d)}${i===0?' · Today':''} <span class="muted" style="font-weight:400;font-size:12px">· work ${hrs(w.work)} · sleep ${hrs(w.sleep)}</span></h4>${w.starts.map(s=>`<div class="ev" style="--ec:var(--${s.type})"><b>${s.range}</b><span>${esc(s.label)}${s.notes?` <span class="muted">· ${esc(s.notes)}</span>`:''}</span></div>`).join('')||'<div class="sm">Nothing scheduled</div>'}</div>`).join(''))+src}
@@ -243,7 +258,7 @@ function bindSB(){const sb=$('#sb'),track=$('#track');let st=null,moved=false;
  $$('.dock [data-app]').forEach(b=>b.onclick=()=>openOV({sec:SECK(b.dataset.app),view:b.dataset.view||''},b.querySelector('.aico')));
  sb.addEventListener('wheel',e=>{if(Math.abs(e.deltaX)>Math.abs(e.deltaY)&&Math.abs(e.deltaX)>30&&!SB.wl){SB.wl=1;setPage(SB.cur+(e.deltaX>0?1:-1));setTimeout(()=>SB.wl=0,500)}},{passive:true})}
 addEventListener('resize',()=>{clearTimeout(SB.rz);SB.rz=setTimeout(()=>setPage(SB.cur,false),100)});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&OV)return closeOV();if(OV)return;if(e.key==='ArrowRight')setPage(SB.cur+1);if(e.key==='ArrowLeft')setPage(SB.cur-1)});
+document.addEventListener('keydown',e=>{const wp=$('.wkpop');if(e.key==='Escape'&&wp)return wp.remove();if(e.key==='Escape'&&OV)return closeOV();if(OV)return;if(e.key==='ArrowRight')setPage(SB.cur+1);if(e.key==='ArrowLeft')setPage(SB.cur-1)});
 
 /* ---------------- zoom-open detail + swipe up to close ---------------- */
 let OV=null;
@@ -261,6 +276,7 @@ function closeOV(){const el=$('#ov');if(!el){OV=null;return}const src=OV.src&&do
  OV=null;document.body.classList.remove('ovopen');setTimeout(()=>{if(!OV)el.remove()},380)}
 function bindOV(el){
  el.querySelector('[data-close]').onclick=closeOV;
+ el.querySelectorAll('.wg [data-wkb]').forEach(b=>{b.onclick=()=>wkPop(+b.dataset.wkb,el);b.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();wkPop(+b.dataset.wkb,el)}}});
  el.querySelectorAll('.ovb [data-view]').forEach(b=>b.onclick=()=>{OV.view=b.dataset.view;drawOV()});
  el.querySelectorAll('.ovb [data-open]').forEach(b=>b.onclick=()=>{OV.sec=b.dataset.open;OV.view=b.dataset.view||'';drawOV()});
  el.querySelectorAll('[data-theme]').forEach(b=>b.onclick=()=>{THEME=b.dataset.theme;localStorage.setItem('dbw:theme',THEME);render()});

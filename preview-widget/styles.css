@@ -1,6 +1,6 @@
 :root{--sat:env(safe-area-inset-top,0px);--sab:env(safe-area-inset-bottom,0px);--sal:env(safe-area-inset-left,0px);--sar:env(safe-area-inset-right,0px);
 --bg:#070b14;--bg2:#0d1526;--card:#111a2e;--card2:#0b1222;--text:#eef2f8;--muted:#8a97ab;--line:rgba(255,255,255,.08);--accent:#38bdf8;--accent2:#fbbf24;--glass:rgba(17,26,46,.62);
---sleep:#818cf8;--chartright:#f59e0b;--ea:#2dd4bf;--workout:#22c55e;--guelph:#c084fc;--event:#38bdf8;--r:22px;--mono:"JetBrains Mono",ui-monospace,monospace}
+--sleep:#818cf8;--chartright:#f59e0b;--ea:#2dd4bf;--workout:#22c55e;--guelph:#c084fc;--event:#38bdf8;--work:#fb923c;--r:22px;--mono:"JetBrains Mono",ui-monospace,monospace}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font:400 15px/1.4 Inter,-apple-system,system-ui,sans-serif;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;overscroll-behavior:none}
 button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
@@ -162,3 +162,25 @@ pre{font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:bre
 /* compact roll-up rows: source label + one line; the detail screen has the rest */
 .roll>.ri:not(.hero) .t2{display:none}
 @media (min-height:900px){.roll>.ri:not(.hero) .t2{display:-webkit-box}}
+/* w5: accounts, setup and editing */
+.jwg{--jwg-bg:var(--bg);--jwg-fg:var(--text);--jwg-mut:var(--muted);--jwg-card:var(--card);--jwg-line:var(--line);--jwg-accent:var(--accent)}
+.jwg .p{color:#04121c}
+.ubtn{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;min-height:44px;border-radius:12px;background:var(--accent);color:#04121c;font-weight:700;font-size:15px}
+.ubtn.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}.ubtn.danger{color:#f87171;border-color:color-mix(in srgb,#f87171 40%,transparent)}
+.ur{display:flex;gap:8px;align-items:stretch;margin-top:10px}.ur>*{flex:1;min-width:0}
+.uin,.ub input,.ub select{width:100%;min-height:44px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--text);padding:0 12px;font:inherit;font-size:16px}
+.uerr{color:#f87171;font-size:13px;min-height:16px;margin:8px 0 0}
+.usheet{position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center}
+.ub{width:100%;max-width:520px;background:var(--card);border-radius:22px 22px 0 0;padding:18px 18px calc(var(--sab) + 18px);max-height:90vh;overflow:auto;animation:ubup .25s ease}
+@keyframes ubup{from{transform:translateY(40px);opacity:.4}}
+.ub h3{font-size:18px;margin:0 0 10px}.ub label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-top:10px}.ub label input,.ub label select{margin-top:4px}
+.li.ue{display:block;width:100%;text-align:left;color:var(--text)}
+.urm{display:flex;align-items:center;gap:10px}.urm>div{flex:1;min-width:0}
+.uck{width:30px;height:30px;border-radius:50%;border:1px solid var(--line);color:var(--muted);flex:none;font-size:14px}.uck.on{background:var(--accent);color:#04121c;border-color:transparent}.uck.x{border:0}
+.uonb{position:fixed;inset:0;z-index:250;overflow-y:auto;background:radial-gradient(120% 60% at 0% 0%,color-mix(in srgb,var(--accent) 18%,transparent),transparent 60%),var(--bg);display:flex;padding:calc(var(--sat) + 28px) 22px calc(var(--sab) + 22px)}
+.uonb .ui{margin:auto;width:100%;max-width:440px}.uonb h1{font-size:28px;letter-spacing:-.02em;margin:6px 0 8px}.uonb p{color:var(--muted);margin:0 0 16px;line-height:1.45}
+.uonb label{display:block;font-size:13px;color:var(--muted);font-weight:600}.uonb label input{margin-top:6px}
+.ustep{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);font-weight:700}
+.upick{display:block;width:100%;text-align:left;padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:var(--card);color:var(--text);margin-top:8px;font-size:15px}
+.upick b{display:block}.upick span{font-size:13px;color:var(--muted)}.upick.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.uchips{display:flex;flex-wrap:wrap;gap:8px}.uchip{padding:10px 14px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--text);font-weight:600;font-size:14px}.uchip.on{background:var(--accent);color:#04121c;border-color:transparent}

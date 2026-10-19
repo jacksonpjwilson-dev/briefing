@@ -50,5 +50,5 @@ function gate(o){css();let el=document.getElementById('jwg');if(!el){el=document
     else if(a==='fp'){const em=el.querySelector('#jwem').value.trim();if(!em){err='Type your email first.';return draw()}await reset(em);err='If that email has an account, a reset link is on its way.';return draw()}
     if(u){el.remove();o.onUser&&o.onUser(u)}}catch(e){err=errMsg(e);draw()}})};
  draw();return {close:()=>el.remove()}}
-window.JWAUTH={init,ready,google,email,reset,signOut,gate,getDoc,setDoc,getCol,denied,errMsg,user:()=>fb&&fb.auth.currentUser,db:()=>fb&&fb.db,CFG};
+window.JWAUTH={css,init,ready,google,email,reset,signOut,gate,getDoc,setDoc,getCol,denied,errMsg,user:()=>fb&&fb.auth.currentUser,db:()=>fb&&fb.db,CFG};
 })();

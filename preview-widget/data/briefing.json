@@ -1,0 +1,122 @@
+{
+ "date": "2026-10-19",
+ "date_label": "Monday, October 19, 2026",
+ "greeting": "Morning, Jackson. Easy Monday: just EA 18:00–21:00 tonight.",
+ "generated": "Data fetched 07:47 ET Mon Oct 19",
+ "weather": {
+  "location": "Waterloo, ON",
+  "now_c": 3.0,
+  "now_label": "Now (07:45)",
+  "high_c": 18.0,
+  "low_c": 2.9,
+  "conditions": "Clear and sunny all day, warming to about 18°C mid-afternoon; around 15°C at 18:00 and 8°C by 21:00",
+  "icon": "☀️",
+  "wind": "WSW 7 km/h, gusts 23",
+  "precip_pct": 0
+ },
+ "aviation": {
+  "station": "CYKF",
+  "category": "VFR",
+  "metar": "METAR CYKF 191100Z AUTO 22002KT 9SM CLR 01/01 A3042 RMK SLP311",
+  "metar_decoded": "Observed 07:00 · Wind 220° at 2 kt · Vis 9 SM · Sky clear · 1°C / dew 1°C · Altimeter 30.42",
+  "taf": "TAF CYKF 190740Z 1908/1920 VRB03KT P6SM SKC\n  BECMG 1910/1912 26007KT\n  RMK FCST BASED ON AUTO OBS. NXT FCST BY 191400Z",
+  "taf_decoded": "Valid Mon 04:00 to 16:00 · Variable wind at 3 kt, vis 6+ SM, sky clear (VFR). Becoming 260° at 7 kt between 06:00 and 08:00. Next TAF by 10:00.",
+  "note": "VFR and clear all day. Temperature and dew point are both 1°C this morning, so expect frost on parked aircraft early. The TAF ends at 16:00, before your 18:00 shift; tonight should stay clear and cool (about 8°C by 21:00)."
+ },
+ "shifts": [
+  {
+   "employer": "EA",
+   "start": "18:00",
+   "end": "21:00",
+   "detail": "YKF GH Lead · Cal's EA shift list · matches Cal's agenda and the EA calendar"
+  },
+  {
+   "employer": "Chartright",
+   "start": null,
+   "end": null,
+   "detail": "No Chartright shift today on the Chartright iCloud calendar or Cal's agenda"
+  }
+ ],
+ "overlap": false,
+ "movements": [],
+ "workout": {
+  "time": "08:30–10:30",
+  "group": "Quads & Calves",
+  "label": "2h · before the 11:00 Guelph window"
+ },
+ "tasks": [
+  "Reminders: nothing overdue; one thing due tomorrow (Tue Oct 20).",
+  "Reminder, Tue Oct 20: plan the family meal for grad day, Fri Oct 23 (lunch after the ceremony ends around 13:00, or dinner, for 4–6 people). This morning before 11:00 is the easiest time to pick a spot; Friday in Waterloo during convocation week fills up. Remi won't book without your OK.",
+  "Reminder, Thu Oct 22: pick your grad outfit. Thursday is Chartright 03:30–14:00, so settle it today or Wednesday evening.",
+  "Reminder, Fri Oct 23: pick up gown and regalia 08:30–09:30, before the 10:00 ceremony.",
+  "Due Nov 15: Make Christmas gift list",
+  "Due Nov 15: Book Toronto hotel for Dec 27 night (needs your OK)",
+  "Due Nov 30: Check passport is valid 6+ months, plus travel docs and insurance",
+  "Later: transport to Toronto (Dec 15), buy gifts (Dec 12), wrap gifts (Dec 22), pack (Dec 26), confirm 76ers vs Raptors tickets (Jan 5)",
+  "No due date: D license",
+  "No due date: RAIC form",
+  "No due date: Sell/donate things",
+  "No due date: Get dishes, dish bin, and dish brush + soap",
+  "No due date: Get large garbage bag",
+  "No due date: Call Nick"
+ ],
+ "noteworthy": [
+  {
+   "from": "Indie (Security)",
+   "text": "Google flagged a new iPhone sign-in on Sun Oct 18 at 22:48 and Grok being given access to Google data at 07:25. Both are likely you; worth a quick glance if not."
+  },
+  {
+   "from": "Cal & Remi",
+   "text": "Grad is set for Fri Oct 23, 10:00–13:00, with gown pickup 08:30–09:30 that morning (not today). Friday's workout moved to 15:30–17:30. No drive or parking needed."
+  },
+  {
+   "from": "Romeo (Guelph)",
+   "text": "An open EA coverage shift on Sun Oct 25 (not requested) would overlap the proposed Sun 13:00–21:00 Guelph visit if you take it. Today's and Tuesday's Guelph windows are still clear."
+  },
+  {
+   "from": "FlightBridge",
+   "text": "Not a Chartright day, so no aircraft movements to check."
+  }
+ ],
+ "focus": "Quads & Calves at 08:30, pick the grad-day meal spot before you head to Guelph at 11:00, and be back before 17:00 for EA 18:00–21:00.",
+ "sixers": {
+  "opponent": "New York Knicks",
+  "home_away": "away",
+  "date": "2026-10-20",
+  "date_label": "Tue Oct 20",
+  "tipoff": "19:00 ET",
+  "venue": "Madison Square Garden, New York, NY",
+  "tv": "ERADM, NBC",
+  "game_day": false
+ },
+ "prospects": [
+  {
+   "rank": 1,
+   "title": "Entry Level Pilot - Captain Development Program (ground role, then Navajo FO, then Metro Captain)",
+   "company": "SkyCare Air Ambulance & Charters",
+   "location": "Sioux Lookout, ON (groomer roles also Thunder Bay, Kitchener-Waterloo, St. Andrews MB)",
+   "minimums": "TC CPL, Group 1 Multi-IFR, Class 1 medical, 250 hrs TT, legal to work in Canada, vulnerable-sector check within 30 days, lift 50 lbs",
+   "link": "https://www.aeroscout.net/jobs/entry-level-pilot-skycare-8720",
+   "firstSeen": null
+  },
+  {
+   "rank": 2,
+   "title": "First Officer - C208B Caravan",
+   "company": "CanWest Air / Alberta Central Airways",
+   "location": "Edmonton, AB",
+   "minimums": "200 hrs, CPL, Group 1 IFR, Cat 1 medical, first aid, Class 5 licence, US travel; no IATRA needed at 200-250 hrs (PCC copy says IATRA/frozen ATPL expected once over 500 hrs)",
+   "link": "https://www.aeroscout.net/jobs/first-officer-c208b-canwest-air-and-alberta-central-airways-3604",
+   "firstSeen": null
+  },
+  {
+   "rank": 3,
+   "title": "Pilot - Ongoing Recruitment (ELPP-specific posting removed; Wasaya still takes pilot resumes)",
+   "company": "Wasaya Airways",
+   "location": "Thunder Bay / Sioux Lookout / Pickle Lake, ON",
+   "minimums": "CPL, Class 1 medical, eligible to work in Canada",
+   "link": "https://avcentral.ca/aviation-jobs/pilot-ongoing-recruitment/",
+   "firstSeen": null
+  }
+ ],
+ "source": "snapshot"
+}

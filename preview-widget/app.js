@@ -1,4 +1,4 @@
-/* MyAssistant · daily briefing + schedule, widget home (preview)
+/* MyAssistant · daily briefing + schedule, widget home (preview) · calendar-edit: tap to change, hold-drag to move, ＋ to add
    Architecture: ONE shared STORE (briefing slice + schedule slice). Each SECTION reads its slice and owns
    widget(), summary() and detail(). The Briefing page is built only from section summaries. */
 (()=>{
@@ -22,6 +22,34 @@ const hrs=m=>{const h=m/60;return (Math.round(h*10)/10).toString().replace(/\.0$
 function nowTor(){const p=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).map(x=>[x.type,x.value]));
  return {iso:`${p.year}-${p.month}-${p.day}`,min:(+p.hour%24)*60+ +p.minute}}
 const parseMD=(s,yr)=>{const m=/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})/.exec(s||'');return m?dnum(`${yr}-${String(MON.indexOf(m[1])+1).padStart(2,'0')}-${m[2].padStart(2,'0')}`):null};
+
+/* ---------------- schedule edits: an override layer over the calendar feed (calendar-edit) ----------------
+   SAME RULES as /workspace/fullapp-shared/schedule-edits/schedule_edits.py (Cal's nightly apply). Change both together.
+   - Edit key = source id + '@' + occurrence date (+ '#n' if the same id repeats on one date).
+     Source id = the feed's uid (+ '/' + recurrenceId) when it has one, else 'h' + FNV-1a(type|label|start).
+     (Cal's ids e1, e2… are positions in the file, so they can't be used: they shift whenever an event is added.)
+   - Ops: move {key,covers,src,date,start,dur} · delete {key,covers,src} · add {id,key:'add:'+id,date,start,dur,label,type}.
+     covers = the other pieces of an overnight block (the feed splits at midnight), hidden along with the head.
+   - An edit whose source event is gone (or whose start/title/type changed, which changes the key) is an orphan: not applied,
+     flagged in "Your changes". Edits dated outside the feed's date range are just skipped (old days drop off the feed).
+   - A schedule that already had edits applied (Cal's apply step) carries editsApplied.rawEvents; unapply() restores it first. */
+const fnv=s=>{let h=0x811c9dc5;for(const b of new TextEncoder().encode(s)){h^=b;h=Math.imul(h,0x01000193)>>>0}return h.toString(36)};
+const srcId=e=>e.uid?String(e.uid)+(e.recurrenceId?'/'+e.recurrenceId:''):'h'+fnv([e.type||'',e.label||'',e.start||''].join('|'));
+function keyed(evs){const seen={};return (evs||[]).map(e=>{let k=srcId(e)+'@'+e.date;seen[k]=(seen[k]||0)+1;if(seen[k]>1)k+='#'+seen[k];return Object.assign({},e,{k})})}
+function unapply(S){if(!S||!S.editsApplied||!Array.isArray(S.editsApplied.rawEvents))return S;const o=Object.assign({},S,{events:S.editsApplied.rawEvents});delete o.editsApplied;return o}
+const segsOf=(date,start,dur)=>{const s=t2m(start),z=s+dur;return z<=1440?[{date,start,end:z===1440?'24:00':m2t(z)}]:[{date,start,end:'24:00'},{date:diso(dnum(date)+1),start:'00:00',end:z-1440>=1440?'24:00':m2t(z-1440)}]};
+const endAt=(start,dur)=>{const z=t2m(start)+dur;return z%1440===0&&z>0?'24:00':m2t(z)};
+const EDIT_KEEP_DAYS=30;
+function applyEdits(evs,edits){const K=keyed(evs),by=new Map(K.map(e=>[e.k,e])),hide=new Set(),out=[],orphans=[],changed=[];
+ const ds=K.map(e=>e.date).sort(),lo=ds[0],hi=ds[ds.length-1];
+ for(const x of edits||[]){if(!x||!x.op)continue;
+  if(x.op==='add'){if(x.date&&x.start&&x.dur>0)segsOf(x.date,x.start,x.dur).forEach(g=>out.push(Object.assign({type:x.type||'event',label:x.label||'Event',notes:x.notes||''},g,{k:x.key,edit:{op:'add',key:x.key}})));continue}
+  const h=by.get(x.key);
+  if(!h){const sd=((x.src&&x.src.date)||String(x.key).split('@')[1]||'').slice(0,10);if(lo&&sd>=lo&&sd<=hi)orphans.push(x);continue}
+  if(x.src&&x.src.end&&h.end!==x.src.end)changed.push(x);
+  hide.add(x.key);(x.covers||[]).forEach(c=>hide.add(c));
+  if(x.op==='move'&&x.date&&x.start&&x.dur>0)segsOf(x.date,x.start,x.dur).forEach(g=>out.push(Object.assign({},h,g,{k:x.key,edit:{op:'move',key:x.key}})))}
+ return {events:K.filter(e=>!hide.has(e.k)).concat(out),orphans,changed}}
 
 /* ---------------- shared data store ---------------- */
 const STORE={briefing:null,schedule:null,archive:[],meta:{}};
@@ -60,19 +88,19 @@ async function load(){
  // Schedule slice: Cal's combined schedule (public schedule.json), else bundled snapshot.
  try{STORE.schedule=await getJSON('/schedule/data/schedule.json');STORE.meta.schedule='Live: Cal\u2019s combined schedule'}
  catch(e){STORE.schedule=await getJSON('data/schedule.json');STORE.meta.schedule='Snapshot'}
- STORE.meta.scheduleUpdated=STORE.schedule.updated;
+ STORE.meta.scheduleUpdated=STORE.schedule.updated;STORE.baseSchedule=unapply(STORE.schedule);
  try{STORE.archive=(await getJSON('../days/index.json')).days}catch(e){STORE.archive=[{date:B.date,label:B.date_label,focus:B.focus}]}
- MODEL.cache={}}
+ rebuildSchedule()}
 
 /* ---------------- per-section models (memoised from the store) ---------------- */
 const MODEL={cache:{},get(k){return this.cache[k]||(this.cache[k]=BUILD[k]())}};
 const WORK=new Set(['chartright','ea','work']),TYPEN={sleep:'Sleep',chartright:'Chartright',ea:'EA',workout:'Workout',guelph:'Guelph',event:'Event',work:'Work'};
 const BUILD={
  schedule(){const S=STORE.schedule,B=STORE.briefing,day0=dnum(B.date),now=nowTor();
-  const segs=S.events.map(e=>({d:dnum(e.date),s:t2m(e.start),e:t2m(e.end),type:e.type,label:e.label,notes:e.notes||'',split:e.split})).sort((a,b)=>a.d-b.d||a.s-b.s);
+  const segs=S.events.map(e=>({d:dnum(e.date),s:t2m(e.start),e:t2m(e.end),type:e.type,label:e.label,notes:e.notes||'',split:e.split,k:e.k,ed:e.edit?e.edit.op:''})).sort((a,b)=>a.d-b.d||a.s-b.s);
   // merge overnight continuations into spans (absolute minutes)
   const spans=[];for(const x of segs){const a=x.d*1440+x.s,z=x.d*1440+x.e,p=spans.find(q=>q.type===x.type&&q.z===a&&(x.s===0));
-   if(p){p.z=z;if(x.notes&&!p.notes.includes(x.notes))p.notes=(p.notes?p.notes+' · ':'')+x.notes}else spans.push({a,z,type:x.type,label:x.label,notes:x.notes,split:x.split})}
+   if(p){p.z=z;p.keys.push(x.k);if(x.ed&&!p.ed)p.ed=x.ed;if(x.notes&&!p.notes.includes(x.notes))p.notes=(p.notes?p.notes+' · ':'')+x.notes}else spans.push({a,z,type:x.type,label:x.label,notes:x.notes,split:x.split,keys:[x.k],ed:x.ed})}
   spans.forEach(s=>{s.d=Math.floor(s.a/1440);s.range=m2t(s.a)+'–'+m2t(s.z)+(Math.floor((s.z-1)/1440)>s.d?' (+1)':'')});
   const clip=d=>spans.filter(s=>s.a<(d+1)*1440&&s.z>d*1440).map(s=>Object.assign({},s,{cs:Math.max(0,s.a-d*1440),ce:Math.min(1440,s.z-d*1440)}));
   const live=now.iso===B.date,nowAbs=live?day0*1440+now.min:null;
@@ -117,14 +145,9 @@ const endT=z=>z%1440===0?'24:00':m2t(z);
 function wkBlk(s,d,H){const px=(s.ce-s.cs)/60*H,from=s.a<d*1440,cont=s.z>(d+1)*1440,sl=s.type==='sleep',ty=s.type in TYPEN?s.type:'event';
  const st=(from?'↑':'')+m2t(s.a),en=endT(s.z)+(cont?'↓':'');let L=[];
  if(px>=36)L=[[TYPEN[ty],px>=48?'wr':''],st,en];else if(px>=33)L=[st,en];else if(px>=13)L=[from?'…'+en:st];
- const id=WKB.push({s,d})-1,lab=`${TYPEN[ty]}${s.label&&s.label!==TYPEN[ty]?' '+s.label:''}, ${dlab(Math.floor(s.a/1440))} ${m2t(s.a)} to ${endT(s.z)}`;
- return `<i role="button" tabindex="0" data-wkb="${id}" aria-label="${esc(lab)}" class="${sl?'sl':''}${px<13?' tiny':''}" style="top:${s.cs/60*H}px;height:${Math.max(3,px)}px;background:var(--${ty})">${L.map(x=>Array.isArray(x)?`<em class="${x[1]}">${x[1]?esc(x[0]).replace('Chartright','Chart&shy;right').replace('Workout','Work&shy;out'):esc(x[0])}</em>`:`<span>${esc(x)}</span>`).join('')}</i>`}
-function wkPop(id,ov){const b=WKB[id];if(!b)return;const s=b.s,ty=s.type in TYPEN?s.type:'event',d1=Math.floor(s.a/1440),d2=Math.floor((s.z-1)/1440);
- const when=d1===d2?`${dlab(d1)}`:`${dlab(d1)} → ${dlab(d2)}`;
- let p=ov.querySelector('.wkpop');if(p)p.remove();p=document.createElement('div');p.className='wkpop';
- p.innerHTML=`<div class="wkp" role="dialog" aria-label="${esc(TYPEN[ty])} details" style="--ec:var(--${ty})"><div class="k"><span class="dot"></span>${esc(TYPEN[ty])}</div><b>${esc(s.label||TYPEN[ty])}</b><div class="tm">${m2t(s.a)}–${endT(s.z)}${d2>d1?' <small>(+1)</small>':''}</div><div class="sm">${esc(when)} · ${hrs(s.z-s.a)}${b.d!==d1?` · continued from ${ddow(d1)}`:''}</div>${s.notes?`<div class="sm nt">${esc(s.notes)}</div>`:''}<button class="done">Done</button></div>`;
- p.onclick=e=>{if(e.target===p||e.target.closest('.done'))p.remove()};ov.appendChild(p);p.querySelector('.done').focus({preventScroll:true})}
-
+ const id=WKB.push({s,d})-1,lab=`${TYPEN[ty]}${s.label&&s.label!==TYPEN[ty]?' '+s.label:''}, ${dlab(Math.floor(s.a/1440))} ${m2t(s.a)} to ${endT(s.z)}${s.ed?', edited':''}. Tap to change, hold and drag to move`;
+ return `<i role="button" tabindex="0" data-wkb="${id}" aria-label="${esc(lab)}" class="${sl?'sl':''}${px<13?' tiny':''}${s.ed?' ed':''}" style="top:${s.cs/60*H}px;height:${Math.max(3,px)}px;background:var(--${ty})">${L.map(x=>Array.isArray(x)?`<em class="${x[1]}">${x[1]?esc(x[0]).replace('Chartright','Chart&shy;right').replace('Workout','Work&shy;out'):esc(x[0])}</em>`:`<span>${esc(x)}</span>`).join('')}</i>`}
+/* tapping a block opens evSheet() (calendar editing, below) */
 const SEC={
  schedule:{name:'Schedule',ico:'🗓️',c:'#38bdf8',
   widget(m,view){if(view==='week'){return `<div class="wl">🗓️ This week<span class="tag muted">${m.wk.shifts} shifts · ${m.wk.workouts} workouts</span></div><div class="wkm">${m.week.map((w,i)=>`<div class="d${i===0?' today':''}"><small>${ddow(w.d).slice(0,2)} ${new Date(w.d*864e5).getUTCDate()}</small><div class="col">${w.segs.map(s=>`<i style="top:${s.cs/14.4}%;height:${(s.ce-s.cs)/14.4}%;background:var(--${s.type})"></i>`).join('')}</div></div>`).join('')}</div>`}
@@ -136,24 +159,17 @@ const SEC={
   summary(m){const n=m.next,on=n&&m.live&&n.a<=m.nowAbs;return {cls:'hero',t1:n?`${on?'Now':'Next'}: ${n.label} · ${n.range}`:'Nothing else scheduled today',
    html:`${tl(m.today,m.live?m.now.min:null)}<div class="evl">${m.todayList.filter(s=>s.type!=='sleep').slice(0,4).map(s=>evrow(s,n&&s.a===n.a)).join('')}</div>`}},
   weekSummary(m){return {t1:`This week: ${m.wk.shifts} shifts (${hrs(m.wk.work)}), ${m.wk.workouts} workouts`,t2:`${m.wk.sleepAvg?`Avg sleep ${hrs(m.wk.sleepAvg)} a day`:isUser()?'Tap to see and edit your week':''}${m.flags.length?` · ⚠ ${m.flags.length} short-sleep night${m.flags.length>1?'s':''}`:''}`}},
-  detail(m,view){const seg=`<div class="seg"><button data-view="today" class="${view!=='week'?'on':''}">Today</button><button data-view="week" class="${view==='week'?'on':''}">Week</button></div>`;
-   const src=isUser()?userEventsCard()+`<p class="sm" style="margin-top:6px">Times are ${esc(TZ)}, 24 h.</p>`:`<p class="sm" style="margin-top:6px">Source: Cal\u2019s combined schedule (${esc(STORE.meta.schedule)}, updated ${esc((m.updated||'').replace('T',' ').slice(0,16))} UTC). Times are Ontario, 24 h.</p>`;
-   if(view==='week'){const H=22;WKB.length=0;
-    return hd('schedule',`${dlab(m.day0)} – ${dlab(m.day0+6)}`)+seg+`<div class="stat3"><div><b>${m.wk.shifts}</b><span>Shifts</span></div><div><b>${hrs(m.wk.work)}</b><span>Work</span></div><div><b>${m.wk.workouts}</b><span>Workouts</span></div></div>`+
-    card('Week view',`<div class="wg" style="--hh:${H}px"><div></div>${m.week.map((w,i)=>`<div class="h${i===0?' today':''}">${ddow(w.d)}<br>${new Date(w.d*864e5).getUTCDate()}</div>`).join('')}
+  detail(m){const H=22;WKB.length=0;const reg=(s,d)=>WKB.push({s,d})-1;
+   const src=isUser()?userEventsCard()+`<p class="sm" style="margin-top:6px">Times are ${esc(TZ)}, 24 h.</p>`:MODE.qa?`<p class="sm" style="margin-top:6px">QA demo: a sample schedule. Edits stay in this browser tab. Times are 24 h.</p>`:`<p class="sm" style="margin-top:6px">Source: Cal\u2019s combined schedule (${esc(STORE.meta.schedule)}, updated ${esc((m.updated||'').replace('T',' ').slice(0,16))} UTC), with your changes on top. Times are Ontario, 24 h.</p>`;
+   return hd('schedule',`${dlab(m.day0)} – ${dlab(m.day0+6)}${m.live?` · now ${m2t(m.now.min)}`:''}`)+`<div class="stat3"><div><b>${m.wk.shifts}</b><span>Shifts</span></div><div><b>${hrs(m.wk.work)}</b><span>Work</span></div><div><b>${m.wk.workouts}</b><span>Workouts</span></div></div>`+
+    card('Week view',`<div class="wg" style="--hh:${H}px" data-hh="${H}"><div></div>${m.week.map((w,i)=>`<div class="h${i===0?' today':''}">${ddow(w.d)}<br>${new Date(w.d*864e5).getUTCDate()}</div>`).join('')}
      <div class="ax" style="height:${24*H}px">${[0,3,6,9,12,15,18,21,24].map(h=>`<span class="${h===0?'f':h===24?'l':''}" style="top:${h*H}px">${String(h).padStart(2,'0')}:00</span>`).join('')}</div>
-     ${m.week.map((w,i)=>`<div class="col${i===0?' today':''}" style="height:${24*H}px">${w.segs.map(s=>wkBlk(s,w.d,H)).join('')}</div>`).join('')}</div>
-     <p class="sm wkhint">Tap any block for its full times. ↑ continues from the day before · ↓ continues past midnight.</p>
+     ${m.week.map((w,i)=>`<div class="col${i===0?' today':''}" data-d="${w.d}" style="height:${24*H}px">${w.segs.map(s=>wkBlk(s,w.d,H)).join('')}${m.live&&w.d===m.day0?`<span class="nowk" style="top:${m.now.min/60*H}px" aria-hidden="true"></span>`:''}</div>`).join('')}</div>
+     <p class="sm wkhint">Tap a block to change or delete it. Hold a block, then drag to move it (15 min steps). ↑ continues from the day before · ↓ continues past midnight.</p>
      <div class="legend">${Object.keys(TYPEN).map(t=>`<span style="--ec:var(--${t})">${TYPEN[t]}</span>`).join('')}</div>`)+
+    changesCard()+
     (m.flags.length?card('⚠ Sleep flags',m.flags.map(f=>`<div class="li">${esc(f)}</div>`).join('')):'')+
-    card('Day by day',m.week.map((w,i)=>`<div class="dayrow${i===0?' today':''}"><h4>${dlab(w.d)}${i===0?' · Today':''} <span class="muted" style="font-weight:400;font-size:12px">· work ${hrs(w.work)} · sleep ${hrs(w.sleep)}</span></h4>${w.starts.map(s=>`<div class="ev" style="--ec:var(--${s.type})"><b>${s.range}</b><span>${esc(s.label)}${s.notes?` <span class="muted">· ${esc(s.notes)}</span>`:''}</span></div>`).join('')||'<div class="sm">Nothing scheduled</div>'}</div>`).join(''))+src}
-   const H=38,blocks=m.today.map(s=>`<div class="blk" style="--ec:var(--${s.type});top:${s.cs/60*H}px;height:${Math.max(22,(s.ce-s.cs)/60*H-2)}px"><b>${esc(s.label)}</b><small>${m2t(s.cs)}–${m2t(s.ce)}${s.a<m.day0*1440?' · since yesterday':''}${s.z>(m.day0+1)*1440?' · continues':''}</small>${s.notes&&(s.ce-s.cs)>=90?`<div class="muted">${esc(s.notes)}</div>`:''}</div>`).join('');
-   const fr=m.free.map(f=>`<div class="blk free" style="top:${f[0]/60*H}px;height:${(f[1]-f[0])/60*H-2}px"><b class="muted">Free</b><small>${m2t(f[0])}–${m2t(f[1])}</small></div>`).join('');
-   return hd('schedule',dlab(m.day0)+(m.live?` · now ${m2t(m.now.min)}`:''))+seg+
-    (m.next?card(m.live&&m.next.a<=m.nowAbs?'Happening now':'Next up',`<div class="mid">${esc(m.next.label)}</div><div class="sm">${m.next.range}${m.next.notes?' · '+esc(m.next.notes):''}</div>`):'')+
-    card('Free windows',m.free.length?`<div class="chips">${m.free.map(f=>`<span class="chip">${m2t(f[0])}–${m2t(f[1])} · ${hrs(f[1]-f[0])}</span>`).join('')}</div>`:'<div class="sm">No free windows over 45 min between 06:00 and 23:00</div>')+
-    card('Timeline',`<div class="dt" style="height:${24*H}px">${[...Array(25)].map((_,h)=>`<div class="hl" style="top:${h*H}px"></div><div class="hr" style="top:${h*H}px">${String(h).padStart(2,'0')}:00</div>`).join('')}${fr}${blocks}${m.live?`<div class="nowl" style="top:${m.now.min/60*H}px"></div>`:''}</div>`)+
-    card('All of today',m.todayList.map(s=>`<div class="li"><div class="k" style="color:var(--${s.type})">${TYPEN[s.type]||'Event'} · ${s.range}</div>${esc(s.label)}${s.notes?`<div class="sm">${esc(s.notes)}</div>`:''}</div>`).join(''))+src}},
+    card('Day by day',m.week.map((w,i)=>`<div class="dayrow${i===0?' today':''}"><h4>${dlab(w.d)}${i===0?' · Today':''} <span class="muted" style="font-weight:400;font-size:12px">· work ${hrs(w.work)} · sleep ${hrs(w.sleep)}</span></h4>${w.starts.map(s=>`<button class="ev" data-wkb="${reg(s,w.d)}" style="--ec:var(--${s.type in TYPEN?s.type:'event'})" aria-label="Change ${esc(s.label)} ${s.range}"><b>${s.range}</b><span>${esc(s.label)}${s.ed?' <em class="edt">· edited</em>':''}${s.notes?` <span class="muted">· ${esc(s.notes)}</span>`:''}</span></button>`).join('')||'<div class="sm">Nothing scheduled</div>'}</div>`).join(''))+src}},
  weather:{name:'Weather',ico:'🌤️',c:'#fbbf24',
   widget(w){if(!w)return `<div class="wl">🌤️ Weather</div><div class="wb sm">Unavailable</div>`;return `<div class="wl">🌤️ ${esc(w.location.split(',')[0])}</div><div class="wb"><div class="big">${w.icon} ${Math.round(w.now_c)}°</div><div class="sm cl2" style="margin-top:6px">H ${Math.round(w.high_c)}° · L ${Math.round(w.low_c)}° · ${w.precip_pct}% precip</div></div>`},
   summary(w){return w?{t1:`${Math.round(w.now_c)}° now, high ${Math.round(w.high_c)}°, low ${Math.round(w.low_c)}°`,t2:w.conditions,ico:w.icon}:{t1:'Weather unavailable'}},
@@ -186,7 +202,7 @@ const SEC={
   summary(m){return {cls:'focus',t1:'🎯 '+m.focus,t2:`${m.tasks.length} open tasks`+(m.workout?` · ${m.workout.group} ${m.workout.time}`:'')}},
   detail(m){return hd('day',esc(STORE.briefing.date_label))+card("Today's focus",`<div class="mid" style="font-size:18px">${esc(m.focus)}</div><p class="sm" style="margin-top:8px">${esc(m.greeting)}</p>`)+
    (m.workout?card('Workout',`<div class="mid">${esc(m.workout.group)}</div><div class="sm">${esc(m.workout.time)} · ${esc(m.workout.label)}</div>`):card('Workout','<div class="sm">Rest day</div>'))+
-   card("Today's calendar",m.cal?`<img src="${m.cal}" alt="Today's calendar" style="width:100%;border-radius:12px">`:'<div class="sm">Calendar image appears with the live briefing.</div>'+xlink('schedule','Open today\u2019s schedule'))+
+   card("Today's calendar",m.cal?`<img src="${m.cal}" alt="Today's calendar" style="width:100%;border-radius:12px">`:'<div class="sm">Calendar image appears with the live briefing.</div>'+xlink('schedule','Open your week','week'))+
    card(`Open tasks (${m.tasks.length})`,m.tasks.map(t=>`<div class="li">☐ ${esc(t)}</div>`).join('')||'<div class="sm">All caught up</div>')+
    `<p class="sm">${esc(m.generated)}</p>`}},
  reminders:{name:'Reminders',ico:'⏰',c:'#fb7185',
@@ -225,7 +241,7 @@ function applyTheme(){const t=THEMES[THEME][2],r=document.documentElement.style;
 const settingsHTML=()=>`<div class="hd" style="--sc:var(--accent)"><div class="ico">⚙️</div><div><h2>Settings</h2><p>Account, colourways and data sources</p></div></div>`+
  accountCard()+
  card('Colourway',`<div class="cws">${Object.entries(THEMES).map(([k,[n,mode,t]])=>`<button class="cw${k===THEME?' on':''}" data-theme="${k}"><div class="sw" style="background:${t.bg}"><i style="left:8px;background:${t.accent}"></i><i style="left:30px;background:${t.accent2}"></i><i style="left:52px;background:${t.card}"></i></div><b>${n}</b><span>${mode}</span></button>`).join('')}</div>`)+
- (isUser()?card('Your setup',`<div class="li"><div class="k">Name</div>${esc(MODE.profile.name||'—')}</div><div class="li"><div class="k">Home</div>${esc(MODE.profile.city?MODE.profile.city.label:'Not set')}</div><div class="li"><div class="k">Airport</div>${esc(MODE.profile.icao||'None')}</div><div class="li"><div class="k">Sections</div>${esc((MODE.profile.sections||[]).join(', '))}</div><button class="ubtn ghost" data-ua="resetup" style="margin-top:10px">Change setup</button>`)+card('Data sources',`<div class="li"><div class="k">Weather</div>Open-Meteo (free, no account)</div><div class="li"><div class="k">METAR</div>VATSIM METAR service</div><div class="li"><div class="k">Schedule and reminders</div>${MODE.cloud?'Saved to your account':'Saved on this device (account storage isn’t switched on yet)'}</div>`):card('Data sources',`<div class="li"><div class="k">Briefing · weather, aviation, work, day, reminders, inbox highlights, more</div>${esc(STORE.meta.briefing)} · ${esc(STORE.briefing.generated)}</div><div class="li"><div class="k">Schedule · today and week</div>${esc(STORE.meta.schedule)}</div><div class="li"><div class="k">Inbox thread list</div><span class="sample">SAMPLE DATA</span></div>`))+
+ (isUser()?card('Your setup',`<div class="li"><div class="k">Name</div>${esc(MODE.profile.name||'—')}</div><div class="li"><div class="k">Home</div>${esc(MODE.profile.city?MODE.profile.city.label:'Not set')}</div><div class="li"><div class="k">Airport</div>${esc(MODE.profile.icao||'None')}</div><div class="li"><div class="k">Sections</div>${esc((MODE.profile.sections||[]).join(', '))}</div><button class="ubtn ghost" data-ua="resetup" style="margin-top:10px">Change setup</button>`)+card('Data sources',`<div class="li"><div class="k">Weather</div>Open-Meteo (free, no account)</div><div class="li"><div class="k">METAR</div>VATSIM METAR service</div><div class="li"><div class="k">Schedule and reminders</div>${MODE.cloud?'Saved to your account':'Saved on this device (account storage isn’t switched on yet)'}</div>`):card('Data sources',`<div class="li"><div class="k">Briefing · weather, aviation, work, day, reminders, inbox highlights, more</div>${esc(STORE.meta.briefing)} · ${esc(STORE.briefing.generated)}</div><div class="li"><div class="k">Schedule · week, with your changes</div>${esc(STORE.meta.schedule)}</div><div class="li"><div class="k">Inbox thread list</div><span class="sample">SAMPLE DATA</span></div>`))+
  card('Gestures',`<div class="li">Swipe left and right between pages</div><div class="li">Tap any widget or briefing line to open its section</div><div class="li">Swipe up from the bottom bar to close</div>`)+
  `<p class="sm">No money or financial information is shown in this app. Times are ${isUser()?esc(TZ):'Ontario (America/Toronto)'}, 24 h.</p>`;
 function accountCard(){const u=MODE.user;if(!u)return '';return card('Account',`<div class="li"><div class="k">Signed in</div>${esc(u.email||u.displayName||'Account')}</div><div class="li"><div class="k">Mode</div>${MODE.kind==='owner'?(MODE.feed?'Your crew feeds (private)':'Your crew feeds (temporary public files)'):'Personal'}</div><button class="ubtn ghost" data-ua="signout" style="margin-top:10px">Sign out</button><p class="sm">Signing out also signs you out of Logbook and Pantry on this browser.</p>`)}
@@ -233,17 +249,17 @@ function accountCard(){const u=MODE.user;if(!u)return '';return card('Account',`
 /* ---------------- springboard ---------------- */
 const SB={cur:+(sessionStorage.getItem('dbw:pg')||0),n:3};
 const PAGES=[{name:'Briefing'},{name:'Today',w:[['schedule','today','c2 r2'],['weather','','',],['aviation',''],['work','','c2']]},{name:'Plan',w:[['week','week','c2 r2'],['day',''],['reminders',''],['inbox',''],['more','']]}];
-const DOCK=[['schedule','today','Today','🗓️','linear-gradient(160deg,#38bdf8,#1d4ed8)'],['week','week','Week','📆','linear-gradient(160deg,#a78bfa,#6d28d9)'],['inbox','','Inbox','✉️','linear-gradient(160deg,#60a5fa,#2563eb)'],['settings','','Settings','⚙️','linear-gradient(160deg,#c8ccd2,#6b7280)']];
+const DOCK=[['week','week','Week','📆','linear-gradient(160deg,#a78bfa,#6d28d9)'],['inbox','','Inbox','✉️','linear-gradient(160deg,#60a5fa,#2563eb)'],['settings','','Settings','⚙️','linear-gradient(160deg,#c8ccd2,#6b7280)']];
 const BRIEF=[['day','','summary'],['weather','','summary'],['aviation','','summary'],['work','','summary'],['reminders','','summary'],['inbox','','summary'],['more','','summary']];
 function briefingHTML(){const B=STORE.briefing,live=B.source==='live'||B.source==='user';
  return `<header class="top"><div style="min-width:0"><div class="kick">✈ MyAssistant</div><h1>${esc(B.date_label.replace(/, \d{4}$/,''))}</h1><div class="sub cl2">${esc(B.greeting)}</div></div><span class="live${live?'':' snap'}">${live?'● LIVE':'SNAPSHOT'}</span></header>
  <div class="roll">${(()=>{if(!vis('schedule'))return '';const S=SEC.schedule,m=MODEL.get('schedule'),r=S.summary(m),w=S.weekSummary(m);
-  return `<div class="ri hero" style="--sc:${S.c}"><button class="hz" data-open="schedule" data-view="today" aria-label="Schedule today: ${esc(r.t1)}"><div style="display:flex;gap:10px;align-items:center"><span class="ico">${S.ico}</span><span class="tx"><div class="src">from Schedule · Today</div><div class="t1 cl1">${esc(r.t1)}</div></span></div>${r.html}</button>
+  return `<div class="ri hero" style="--sc:${S.c}"><button class="hz" data-open="schedule" data-view="week" aria-label="Schedule today (opens your week): ${esc(r.t1)}"><div style="display:flex;gap:10px;align-items:center"><span class="ico">${S.ico}</span><span class="tx"><div class="src">from Schedule · Today</div><div class="t1 cl1">${esc(r.t1)}</div></span></div>${r.html}</button>
   <button class="hz wk" data-open="schedule" data-view="week" aria-label="Schedule week: ${esc(w.t1)}"><span class="tx"><div class="src">from Schedule · Week</div><div class="t1 cl1">${esc(w.t1)}</div><div class="t2 cl1">${esc(w.t2)}</div></span><span class="chev">›</span></button></div>`})()}
  ${BRIEF.map(([k,view,fn])=>{const S=SEC[k],r=S[fn](MODEL.get(k));
   return `<button class="ri ${r.cls||''}" style="--sc:${S.c}" data-open="${k}" data-view="${view}" aria-label="${esc(S.name)}: ${esc(r.t1)}"><span class="ico">${r.ico||S.ico}</span><span class="tx"><div class="src">from ${S.name}</div><div class="t1 cl1">${esc(r.t1)}</div>${r.t2?`<div class="t2 cl1">${esc(r.t2)}</div>`:''}</span><span class="chev">›</span></button>`}).join('')}</div>`}
 function pageHTML(p,i){if(i===0)return briefingHTML();
- return `<header class="top"><div><div class="kick">${i===1?'Today':'Plan ahead'}</div><h1>${i===1?'Sections':'Week & more'}</h1></div></header><div class="wgrid">${p.w.map(([k,view,cls])=>{const s=SECK(k);return `<button class="w ${cls||''}" style="--sc:${SEC[s].c}" data-open="${s}" data-view="${view}" aria-label="Open ${SEC[s].name}">${SEC[s].widget(MODEL.get(s),view)}</button>`}).join('')}</div>`}
+ return `<header class="top"><div><div class="kick">${i===1?'Today':'Plan ahead'}</div><h1>${i===1?'Sections':'Week & more'}</h1></div></header><div class="wgrid">${p.w.map(([k,view,cls])=>{const s=SECK(k);return `<button class="w ${cls||''}" style="--sc:${SEC[s].c}" data-open="${s}" data-view="${s==='schedule'?'week':view}" aria-label="Open ${SEC[s].name}${s==='schedule'?' week':''}">${SEC[s].widget(MODEL.get(s),view)}</button>`}).join('')}</div>`}
 function render(){applyTheme();
  $('#app').innerHTML=`<div class="sb" id="sb"><div class="track" id="track">${PAGES.map((p,i)=>`<section class="page" data-pi="${i}">${pageHTML(p,i)}</section>`).join('')}</div></div>
  <div class="dockwrap"><div class="pdots">${PAGES.map((p,i)=>`<button data-pg="${i}" aria-label="${p.name}" class="${i===SB.cur?'on':''}"><i></i></button>`).join('')}</div><nav class="dock" aria-label="Apps">${DOCK.map(([k,v,n,ic,bg])=>`<button data-app="${k}" data-view="${v}" aria-label="${n}"><span class="aico" style="background:${bg}">${ic}</span><span>${n}</span></button>`).join('')}</nav></div>`;
@@ -261,17 +277,18 @@ function bindSB(){const sb=$('#sb'),track=$('#track');let st=null,moved=false;
  $$('.dock [data-app]').forEach(b=>b.onclick=()=>openOV({sec:SECK(b.dataset.app),view:b.dataset.view||''},b.querySelector('.aico')));
  sb.addEventListener('wheel',e=>{if(Math.abs(e.deltaX)>Math.abs(e.deltaY)&&Math.abs(e.deltaX)>30&&!SB.wl){SB.wl=1;setPage(SB.cur+(e.deltaX>0?1:-1));setTimeout(()=>SB.wl=0,500)}},{passive:true})}
 addEventListener('resize',()=>{clearTimeout(SB.rz);SB.rz=setTimeout(()=>setPage(SB.cur,false),100)});
-document.addEventListener('keydown',e=>{const wp=$('.wkpop');if(e.key==='Escape'&&wp)return wp.remove();if(e.key==='Escape'&&OV)return closeOV();if(OV)return;if(e.key==='ArrowRight')setPage(SB.cur+1);if(e.key==='ArrowLeft')setPage(SB.cur-1)});
+document.addEventListener('keydown',e=>{const wp=$('.usheet');if(e.key==='Escape'&&wp)return wp.remove();if(e.key==='Escape'&&OV)return closeOV();if(OV)return;if(e.key==='ArrowRight')setPage(SB.cur+1);if(e.key==='ArrowLeft')setPage(SB.cur-1)});
 
 /* ---------------- zoom-open detail + swipe up to close ---------------- */
 let OV=null;
 const rectFT=r=>`translate(${r.left}px,${r.top}px) scale(${r.width/VW()},${r.height/VH()})`;
 function ovBody(){return OV.sec==='settings'?settingsHTML():SEC[OV.sec].detail(MODEL.get(OV.sec),OV.view)}
-function ovTitle(){return OV.sec==='settings'?'Settings':OV.sec==='schedule'?(OV.view==='week'?'Week':'Today'):SEC[OV.sec].name}
+function ovTitle(){return OV.sec==='settings'?'Settings':OV.sec==='schedule'?'Week':SEC[OV.sec].name}
 function drawOV(){let el=$('#ov');if(!el){el=document.createElement('div');el.id='ov';el.className='ov';document.body.appendChild(el)}
  const sc=OV.sec==='settings'?'var(--accent)':SEC[OV.sec].c;el.style.setProperty('--sc',sc);
- el.innerHTML=`<div class="ovh"><button class="back" data-close aria-label="Back to home">‹ Home</button><b>${esc(ovTitle())}</b></div><div class="ovb">${ovBody()}</div><div class="homebar" role="button" tabindex="0" aria-label="Swipe up to go home"><i></i></div>`;bindOV(el)}
-function openOV(state,src){OV=state;OV.src=src;drawOV();const el=$('#ov'),r=src?src.getBoundingClientRect():{left:VW()*.3,top:VH()*.35,width:VW()*.4,height:VH()*.3};
+ const ob0=el.querySelector('.ovb'),keep=ob0&&el.dataset.k===OV.sec?ob0.scrollTop:0;el.dataset.k=OV.sec;
+ el.innerHTML=`<div class="ovh"><button class="back" data-close aria-label="Back to home">‹ Home</button><b>${esc(ovTitle())}</b></div><div class="ovb">${ovBody()}</div>${OV.sec==='schedule'?'<button class="fab" data-add aria-label="Add event">＋</button>':''}<div class="homebar" role="button" tabindex="0" aria-label="Swipe up to go home"><i></i></div>`;if(keep)el.querySelector('.ovb').scrollTop=keep;bindOV(el)}
+function openOV(state,src){OV=state;OV.src=src;const o0=$('#ov');if(o0)o0.dataset.k='';drawOV();const el=$('#ov'),r=src?src.getBoundingClientRect():{left:VW()*.3,top:VH()*.35,width:VW()*.4,height:VH()*.3};
  el.style.transition='none';el.style.transform=rectFT(r);el.style.borderRadius='60px';el.style.opacity='.5';el.offsetWidth;
  el.style.transition='transform .42s cubic-bezier(.2,.9,.25,1),border-radius .42s,opacity .2s';el.style.transform='none';el.style.borderRadius='0';el.style.opacity='1';document.body.classList.add('ovopen')}
 function closeOV(){const el=$('#ov');if(!el){OV=null;return}const src=OV.src&&document.contains(OV.src)?OV.src:null,r=src?src.getBoundingClientRect():{left:VW()*.3,top:VH()*.35,width:VW()*.4,height:VH()*.3};
@@ -280,7 +297,10 @@ function closeOV(){const el=$('#ov');if(!el){OV=null;return}const src=OV.src&&do
 function bindOV(el){
  el.querySelector('[data-close]').onclick=closeOV;
  el.querySelectorAll('[data-ua]').forEach(b=>b.onclick=e=>{e.stopPropagation();userAction(b.dataset.ua,b.dataset.id,el)});
- el.querySelectorAll('.wg [data-wkb]').forEach(b=>{b.onclick=()=>wkPop(+b.dataset.wkb,el);b.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();wkPop(+b.dataset.wkb,el)}}});
+ el.querySelectorAll('.ovb [data-wkb]').forEach(b=>{b.onclick=()=>{if(Date.now()-DRAG.dropAt<450)return;const x=WKB[+b.dataset.wkb];x&&evSheet(x.s)};b.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();b.click()}}});
+ const wg=el.querySelector('.wg');if(wg)bindDrag(wg,el);
+ const fab=el.querySelector('[data-add]');if(fab)fab.onclick=()=>evSheet(null);
+ el.querySelectorAll('[data-ereset]').forEach(b=>b.onclick=()=>resetEdit(b.dataset.ereset));
  el.querySelectorAll('.ovb [data-view]').forEach(b=>b.onclick=()=>{OV.view=b.dataset.view;drawOV()});
  el.querySelectorAll('.ovb [data-open]').forEach(b=>b.onclick=()=>{OV.sec=b.dataset.open;OV.view=b.dataset.view||'';drawOV()});
  el.querySelectorAll('[data-theme]').forEach(b=>b.onclick=()=>{THEME=b.dataset.theme;localStorage.setItem('dbw:theme',THEME);render()});
@@ -342,7 +362,7 @@ async function fetchMetar(icao){if(!icao)return null;try{const r=await getJSON(`
 /* ---- a new user's schedule: their own events (one-off or repeating) expanded into schedule.json shape ---- */
 function expandEvents(evs,d0,days){const out=[];for(const e of evs){for(let d=d0-1;d<d0+days;d++){const iso=diso(d),dw=new Date(d*864e5).getUTCDay(),ed=dnum(e.date);if(d<ed)continue;
   const hit=e.repeat==='daily'||(e.repeat==='weekdays'&&dw>0&&dw<6)||(e.repeat==='weekly'&&(d-ed)%7===0)||(!e.repeat&&d===ed);if(!hit)continue;
-  const s=t2m(e.start),z=t2m(e.end),base={type:e.type,label:e.label||TYPEN[e.type]||'Event',notes:e.notes||'',id:e.id};
+  const s=t2m(e.start),z=t2m(e.end),base={type:e.type,label:e.label||TYPEN[e.type]||'Event',notes:e.notes||'',id:e.id,uid:'u'+e.id,tpl:e.id};
   if(z>s)out.push(Object.assign({date:iso,start:e.start,end:e.end},base));else{out.push(Object.assign({date:iso,start:e.start,end:'24:00'},base));out.push(Object.assign({date:diso(d+1),start:'00:00',end:e.end},base))}}}
  return out}
 function todayLabel(){return new Intl.DateTimeFormat('en-CA',{timeZone:TZ,weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(new Date()).replace(/^(\w+), /,'$1, ')}
@@ -351,8 +371,8 @@ async function loadUser(){const P=MODE.profile;TZ=(P.city&&P.city.tz)||Intl.Date
  const want=k=>(P.sections||[]).includes(k);
  const [wx,av]=await Promise.all([want('weather')?fetchWeather(P.city):null,want('aviation')?fetchMetar(P.icao):null]);
  STORE.briefing={date:n.iso,date_label:todayLabel(),greeting:greet,generated:'Updated '+m2t(n.min),weather:wx,aviation:av,shifts:[],overlap:false,movements:[],workout:null,tasks:[],noteworthy:[],focus:'',sixers:null,prospects:[],source:'user'};
- STORE.schedule={timezone:TZ,updated:new Date().toISOString(),events:expandEvents(MODE.sched.events||[],dnum(n.iso),14)};
- STORE.meta={briefing:'Your sources: '+[wx&&'Open-Meteo weather',av&&'VATSIM METAR'].filter(Boolean).join(', ')||'Your sources',schedule:'Your own events'};STORE.archive=[];MODEL.cache={}}
+ STORE.baseSchedule={timezone:TZ,updated:new Date().toISOString(),events:expandEvents(MODE.sched.events||[],dnum(n.iso),14)};
+ STORE.meta={briefing:'Your sources: '+[wx&&'Open-Meteo weather',av&&'VATSIM METAR'].filter(Boolean).join(', ')||'Your sources',schedule:'Your own events'};STORE.archive=[];rebuildSchedule()}
 /* ---- which sections a new user sees ---- */
 const USER_SECS=[['schedule','Schedule','🗓️'],['weather','Weather','🌤️'],['aviation','Aviation (METAR)','🛫'],['reminders','Reminders','⏰']];
 const vis=k=>{if(!isUser())return true;const s=SECK(k);if(['work','inbox','more','day'].includes(s))return false;if(s==='aviation'&&!MODE.profile.icao)return false;return (MODE.profile.sections||[]).includes(s)};
@@ -368,14 +388,119 @@ function eventSheet(id){const ev=(MODE.sched.events||[]).find(e=>e.id===id)||{id
  usheet(`<h3>${ev.id?'Edit event':'Add event'}</h3><label>Name<input id="ue_l" value="${esc(ev.label)}" placeholder="e.g. Work, Gym, Class"></label>
  <label>Type<select id="ue_t">${ETYPES.map(([k,n])=>`<option value="${k}" ${k===ev.type?'selected':''}>${n}</option>`).join('')}</select></label>
  <div class="ur"><label>Date<input id="ue_d" type="date" value="${esc(ev.date)}"></label><label>Repeats<select id="ue_r">${REP.map(([k,n])=>`<option value="${k}" ${k===(ev.repeat||'')?'selected':''}>${n}</option>`).join('')}</select></label></div>
- <div class="ur"><label>Start<input id="ue_s" type="time" value="${esc(ev.start)}"></label><label>End<input id="ue_e" type="time" value="${esc(ev.end)}"></label></div>
+ <div class="ur"><label>Start${TSEL('ue_s',ev.start)}</label><label>End${TSEL('ue_e',ev.end)}</label></div>
  <label>Notes<input id="ue_n" value="${esc(ev.notes||'')}" placeholder="Optional"></label><p class="uerr" id="ue_x"></p>
  <div class="ur"><button class="ubtn" id="ue_ok">Save</button>${ev.id?'<button class="ubtn ghost danger" id="ue_del">Delete</button>':'<button class="ubtn ghost" id="ue_c">Cancel</button>'}</div>`,(el,close)=>{const g=s=>el.querySelector(s);
-  g('#ue_ok').onclick=async()=>{const v={id:ev.id||uid8(),label:g('#ue_l').value.trim(),type:g('#ue_t').value,date:g('#ue_d').value,start:g('#ue_s').value,end:g('#ue_e').value,repeat:g('#ue_r').value,notes:g('#ue_n').value.trim()};
+  g('#ue_ok').onclick=async()=>{const v={id:ev.id||uid8(),label:g('#ue_l').value.trim(),type:g('#ue_t').value,date:g('#ue_d').value,start:tval(el,'ue_s'),end:tval(el,'ue_e'),repeat:g('#ue_r').value,notes:g('#ue_n').value.trim()};
    if(!v.date||!v.start||!v.end){g('#ue_x').textContent='Pick a date, start and end.';return}if(v.start===v.end){g('#ue_x').textContent='Start and end can’t be the same.';return}
    const l=(MODE.sched.events||[]).filter(e=>e.id!==v.id);l.push(v);MODE.sched={events:l};close();await US.set('schedule',MODE.sched);await refreshUser()};
   g('#ue_c')&&(g('#ue_c').onclick=close);
   g('#ue_del')&&(g('#ue_del').onclick=async()=>{MODE.sched={events:(MODE.sched.events||[]).filter(e=>e.id!==ev.id)};close();await US.set('schedule',MODE.sched);await refreshUser()})})}
+/* ================= calendar editing (calendar-edit) =================
+   Tap a block (Week view or Day by day): change its date and times (and the title, for events you added), delete it,
+   or reset it to the calendar. Hold a block, then drag it to move it (15 min steps; a mouse just drags). ＋ adds an event.
+   Edits are saved to briefing/{uid}/user/scheduleEdits (a device copy is the fallback) and applied over the feed (applyEdits). */
+const EDITS={list:[],orphans:[],changed:[],
+ async load(){let d=null;if(MODE.qa){try{d=JSON.parse(sessionStorage.getItem('dbw:qa:edits')||'null')}catch(e){}}else d=await US.get('scheduleEdits');
+  const cut=diso(dnum(nowTor().iso)-EDIT_KEEP_DAYS);this.list=((d&&Array.isArray(d.edits)&&d.edits)||[]).filter(x=>x&&x.op&&x.key&&((x.op==='add'?x.date:(x.src&&x.src.date)||x.date)||'9')>=cut)},
+ async save(){const d=JSON.parse(JSON.stringify({v:1,edits:this.list}));if(MODE.qa){sessionStorage.setItem('dbw:qa:edits',JSON.stringify(d));return}await US.set('scheduleEdits',d)},
+ find(k){return this.list.find(x=>x.key===k)},
+ put(x){x.at=Date.now();this.list=this.list.filter(y=>y.key!==x.key).concat([x])},
+ drop(k){this.list=this.list.filter(y=>y.key!==k)}};
+function rebuildSchedule(){const B=STORE.baseSchedule||{events:[]},r=applyEdits(B.events,EDITS.list);
+ STORE.schedule=Object.assign({},B,{events:r.events});EDITS.orphans=r.orphans;EDITS.changed=r.changed;STORE.baseKeyed=new Map(keyed(B.events).map(e=>[e.k,e]));MODEL.cache={}}
+const DRAG={dropAt:0};
+/* 24 h time picker (iPhone's own time input follows the phone's 12/24 h setting, so we use two selects) */
+function TSEL(id,v){let [h,m]=String(v||'09:00').split(':');if(h==='24')h='00';const mins=[...new Set([...Array(12)].map((_,i)=>i*5).concat([+m]))].sort((a,b)=>a-b);
+ return `<span class="tsel" id="${id}"><select aria-label="Hour" data-p="h">${[...Array(24)].map((_,i)=>{const x=String(i).padStart(2,'0');return `<option ${x===h?'selected':''}>${x}</option>`}).join('')}</select><b>:</b><select aria-label="Minutes" data-p="m">${mins.map(i=>{const x=String(i).padStart(2,'0');return `<option ${i===+m?'selected':''}>${x}</option>`}).join('')}</select></span>`}
+const tval=(el,id)=>el.querySelector('#'+id+' [data-p=h]').value+':'+el.querySelector('#'+id+' [data-p=m]').value;
+function srcOf(s){const h=STORE.baseKeyed&&STORE.baseKeyed.get(s.keys[0]);
+ return h?{date:h.date,start:h.start,end:h.end,dur:s.z-s.a,type:h.type||'',label:h.label||''}:{date:diso(Math.floor(s.a/1440)),start:m2t(s.a),end:endT(s.z),dur:s.z-s.a,type:s.type||'',label:s.label||''}}
+const coversOf=(s,ex)=>[...new Set(((ex&&ex.covers)||[]).concat(s.keys.slice(1)))].filter(k=>k&&k!==s.keys[0]);
+function editSpan(s,v){const k=s.keys[0],ex=EDITS.find(k);
+ if(ex&&ex.op==='add'){EDITS.put(Object.assign({},ex,{date:v.date,start:v.start,dur:v.dur,end:endAt(v.start,v.dur)},v.label!=null?{label:v.label}:{},v.type?{type:v.type}:{}));return}
+ const src=(ex&&ex.src)||srcOf(s);
+ if(src.date===v.date&&src.start===v.start&&src.dur===v.dur){EDITS.drop(k);return}  // moved back to where the calendar has it
+ EDITS.put({op:'move',key:k,covers:coversOf(s,ex),src,date:v.date,start:v.start,dur:v.dur,end:endAt(v.start,v.dur)})}
+async function commitEdits(msg,prev){rebuildSchedule();if(OV)render();toast(msg,prev);await EDITS.save()}
+function toast(msg,prev){$$('.toast').forEach(t=>t.remove());const t=document.createElement('div');t.className='toast';t.setAttribute('role','status');
+ t.innerHTML=`<span>${esc(msg)}</span>${prev?'<button>Undo</button>':''}`;document.body.appendChild(t);
+ if(prev)t.querySelector('button').onclick=async()=>{t.remove();EDITS.list=prev;rebuildSchedule();if(OV)render();await EDITS.save()};
+ setTimeout(()=>t.remove(),prev?6000:3000)}
+async function resetEdit(k){const prev=EDITS.list.slice(),x=EDITS.find(k);EDITS.drop(k);await commitEdits(x&&x.op==='add'?'Deleted':'Back to your calendar',prev)}
+function evSheet(s,def){const isAdd=!s,k=s?s.keys[0]:null,ex=k?EDITS.find(k):null,added=!!(ex&&ex.op==='add'),own=isAdd||added;
+ const ty=isAdd?'event':(s.type in TYPEN?s.type:'event'),raw=k&&STORE.baseKeyed?STORE.baseKeyed.get(k):null,tpl=raw&&raw.tpl,n=nowTor();
+ const d0=isAdd?(def&&def.d!=null?def.d:dnum(n.iso)):Math.floor(s.a/1440),nx=Math.min(23,Math.floor(n.min/60)+1);
+ const st=isAdd?m2t(nx*60):m2t(s.a),en=isAdd?m2t(nx*60+60):m2t(s.z),chg=k&&EDITS.changed.some(c=>c.key===k);
+ const head=own?`<label>Title<input id="es_l" value="${esc(added?ex.label:'')}" placeholder="e.g. Dentist, Class, Gym" maxlength="80"></label><label>Type<select id="es_t">${ETYPES.map(([v,nm])=>`<option value="${v}" ${v===(added?ex.type:'event')?'selected':''}>${nm}</option>`).join('')}</select></label>`
+  :`<div class="evh" style="--ec:var(--${ty})"><div class="k"><span class="dot"></span>${esc(TYPEN[ty]||'Event')}${s.ed?' · <span class="edt">edited</span>':''}</div><b>${esc(s.label||TYPEN[ty])}</b>${s.notes?`<div class="sm">${esc(s.notes)}</div>`:''}${ex&&ex.src?`<div class="sm">In your calendar: ${esc(dlab(dnum(ex.src.date)))} ${esc(ex.src.start)}–${esc(endAt(ex.src.start,ex.src.dur))}</div>`:''}${chg?'<div class="sm warn">⚠ Your calendar changed this event after you edited it.</div>':''}${tpl?'<div class="sm">Changes here are for this day only. <button class="lnk" id="es_series">Edit every repeat</button></div>':''}</div>`;
+ usheet(`<h3>${isAdd?'Add event':added?'Edit your event':'Change event'}</h3>${head}
+  <label>Date<input id="es_d" type="date" value="${diso(d0)}"></label>
+  <div class="ur"><label>Start${TSEL('es_s',st)}</label><label>End${TSEL('es_e',en)}</label></div>
+  <p class="sm" id="es_h"></p><p class="uerr" id="es_x"></p>
+  <div class="ur"><button class="ubtn" id="es_ok">${isAdd?'Add':'Save'}</button>${isAdd?'':'<button class="ubtn ghost danger" id="es_del">Delete</button>'}</div>
+  <div class="ur">${ex&&!added?'<button class="ubtn ghost" id="es_rs">Reset to calendar</button>':''}<button class="ubtn ghost" id="es_c">Cancel</button></div>`,(el,close)=>{const g=q=>el.querySelector(q);
+  const dur=()=>(t2m(tval(el,'es_e'))-t2m(tval(el,'es_s'))+1440)%1440;
+  const hint=()=>{const d=dur();g('#es_h').textContent=d?`${hrs(d)}${t2m(tval(el,'es_s'))+d>1440?' · ends the next day (+1)':''}`:''};
+  el.querySelectorAll('.tsel select').forEach(x=>x.onchange=hint);hint();
+  g('#es_c').onclick=close;
+  g('#es_series')&&(g('#es_series').onclick=()=>{close();eventSheet(tpl)});
+  g('#es_ok').onclick=async()=>{const date=g('#es_d').value,start=tval(el,'es_s'),d=dur(),prev=EDITS.list.slice();
+   if(!/^\d{4}-\d\d-\d\d$/.test(date)){g('#es_x').textContent='Pick a date.';return}
+   if(!d){g('#es_x').textContent='Start and end can\u2019t be the same.';return}
+   if(own){const type=g('#es_t').value,label=g('#es_l').value.trim()||(type==='sleep'?'Sleep':'');if(!label){g('#es_x').textContent='Add a title.';return}
+    if(isAdd){const id=uid8();EDITS.put({op:'add',id,key:'add:'+id,date,start,dur:d,end:endAt(start,d),label,type,notes:''})}else editSpan(s,{date,start,dur:d,label,type})}
+   else editSpan(s,{date,start,dur:d});
+   close();await commitEdits(isAdd?`Added ${dlab(dnum(date))} ${start}`:'Saved',prev)};
+  g('#es_del')&&(g('#es_del').onclick=async()=>{const prev=EDITS.list.slice();if(added)EDITS.drop(k);else EDITS.put({op:'delete',key:k,covers:coversOf(s,ex),src:(ex&&ex.src)||srcOf(s)});close();await commitEdits('Deleted',prev)});
+  g('#es_rs')&&(g('#es_rs').onclick=async()=>{const prev=EDITS.list.slice();EDITS.drop(k);close();await commitEdits('Back to your calendar',prev)})})}
+function changesCard(){const L=EDITS.list;if(!L.length)return '';const orph=new Set(EDITS.orphans.map(x=>x.key)),chg=new Set(EDITS.changed.map(x=>x.key));
+ const when=(date,start,dur)=>date&&start?`${dlab(dnum(date))} ${start}–${endAt(start,dur||0)}${t2m(start)+(dur||0)>1440?' (+1)':''}`:'';const at=x=>(x.date||(x.src&&x.src.date)||'')+(x.start||(x.src&&x.src.start)||'');
+ const rows=L.slice().sort((a,b)=>at(a).localeCompare(at(b))).map(x=>{const o=orph.has(x.key),c=chg.has(x.key),s=x.src||{};
+  const t=x.op==='add'?`<b>Added</b> · ${esc(x.label)}<div class="sm">${esc(when(x.date,x.start,x.dur))}</div>`:x.op==='move'?`<b>Moved</b> · ${esc(s.label)}<div class="sm">${esc(when(s.date,s.start,s.dur))} → ${esc(when(x.date,x.start,x.dur))}</div>`:`<b>Deleted</b> · ${esc(s.label)}<div class="sm">${esc(when(s.date,s.start,s.dur))}</div>`;
+  return `<div class="li chg${o?' orphan':''}"><div>${t}${o?'<div class="sm warn">⚠ No longer in your calendar, so this change isn\u2019t used.</div>':c?'<div class="sm warn">⚠ Your calendar changed this event after you edited it.</div>':''}</div><button class="ubtn ghost" data-ereset="${esc(x.key)}">${x.op==='add'?'Delete':o?'Remove':'Reset'}</button></div>`}).join('');
+ return card(`Your changes (${L.length})`,rows+`<p class="sm" style="margin-top:8px">${MODE.qa?'QA demo: kept in this browser tab only.':MODE.cloud?'Saved to your account.':'Saved on this device.'}${MODE.kind==='owner'&&!MODE.qa?' Cal\u2019s nightly schedule build picks these up for your briefing.':''}</p>`)}
+/* hold-and-drag in the Week view. Touch: hold 0.4 s, then drag (moving sooner just scrolls). Mouse: drag straight away. */
+function bindDrag(wg,ov){const H=+wg.dataset.hh,cols=[...wg.querySelectorAll('.col')],ob=ov.querySelector('.ovb');let P=null,raf=0;
+ const colAt=x=>{let best=cols[0],bd=1e9;for(const c of cols){const r=c.getBoundingClientRect(),d=Math.abs(x-(r.left+r.right)/2);if(d<bd){bd=d;best=c}}return best};
+ const stop=()=>{if(!P)return;clearTimeout(P.t);cancelAnimationFrame(raf);P.g&&P.g.remove();P.b.classList.remove('lift');wg.classList.remove('dragging');document.body.classList.remove('wkdrag');P=null};
+ const place=()=>{const c=colAt(P.x),r=c.getBoundingClientRect(),d=+c.dataset.d,pm=(P.y-r.top)/H*60;let a=Math.round((d*1440+pm-P.grab)/15)*15;
+  a=Math.max(+cols[0].dataset.d*1440-P.dur+15,Math.min((+cols[cols.length-1].dataset.d+1)*1440-15,a));P.a=a;
+  if(P.g.parentNode!==c)c.appendChild(P.g);const top=Math.max(0,a-d*1440),bot=Math.min(1440,a+P.dur-d*1440);
+  P.g.style.top=top/60*H+'px';P.g.style.height=Math.max(6,(bot-top)/60*H)+'px';P.g.querySelector('span').textContent=`${ddow(Math.floor(a/1440))} ${m2t(a)}–${endAt(m2t(a),P.dur)}`};
+ const auto=()=>{if(!P||!P.on)return;const r=ob.getBoundingClientRect();const v=P.y<r.top+50?-7:P.y>r.bottom-80?7:0;if(v){const t=ob.scrollTop;ob.scrollTop+=v;if(ob.scrollTop!==t)place()}raf=requestAnimationFrame(auto)};
+ const begin=()=>{if(!P)return;P.on=true;try{navigator.vibrate&&navigator.vibrate(10)}catch(_){}try{wg.setPointerCapture(P.id)}catch(_){}
+  P.b.classList.add('lift');wg.classList.add('dragging');document.body.classList.add('wkdrag');
+  P.g=document.createElement('div');P.g.className='ghost';P.g.style.setProperty('--ec',getComputedStyle(P.b).backgroundColor);P.g.innerHTML='<span></span>';place();raf=requestAnimationFrame(auto)};
+ wg.addEventListener('pointerdown',e=>{const b=e.target.closest('[data-wkb]');if(!b||(e.pointerType==='mouse'&&e.button!==0))return;const W=WKB[+b.dataset.wkb];if(!W)return;stop();
+  const s=W.s,r=b.parentNode.getBoundingClientRect(),pm=(e.clientY-r.top)/H*60;
+  P={b,s,id:e.pointerId,x0:e.clientX,y0:e.clientY,x:e.clientX,y:e.clientY,touch:e.pointerType!=='mouse',on:false,dur:s.z-s.a,grab:W.d*1440+pm-s.a,a:s.a};
+  if(P.touch)P.t=setTimeout(begin,400)});
+ wg.addEventListener('pointermove',e=>{if(!P||e.pointerId!==P.id)return;P.x=e.clientX;P.y=e.clientY;
+  if(!P.on){if(Math.hypot(P.x-P.x0,P.y-P.y0)>8){if(P.touch)stop();else begin()}return}
+  e.preventDefault();place()});
+ wg.addEventListener('pointerup',async e=>{if(!P||e.pointerId!==P.id)return;if(!P.on)return stop();
+  const s=P.s,a=P.a;stop();DRAG.dropAt=Date.now();if(a===s.a)return;
+  const prev=EDITS.list.slice(),date=diso(Math.floor(a/1440)),start=m2t(a);editSpan(s,{date,start,dur:s.z-s.a});
+  await commitEdits(`Moved to ${dlab(Math.floor(a/1440))} ${start}–${endAt(start,s.z-s.a)}`,prev)});
+ wg.addEventListener('pointercancel',e=>{if(P&&e.pointerId===P.id)stop()});
+ wg.addEventListener('touchmove',e=>{if(P&&P.on&&e.cancelable)e.preventDefault()},{passive:false}); // holds the page still while dragging (iOS)
+ wg.addEventListener('contextmenu',e=>{if(P)e.preventDefault()})}
+/* QA demo (?qa=1): sample schedule, no sign-in, nothing leaves the tab. For Bugsy and for trying the editor safely. */
+function qaFeed(d0){const E=[],ev=(d,s,e,type,label,notes,x)=>E.push(Object.assign({date:diso(d),start:s,end:e,type,label,notes:notes||''},x||{}));
+ for(let i=-1;i<14;i++){const d=d0+i,w=((i%7)+7)%7;
+  if(w!==4){ev(d,'23:00','24:00','sleep','Sleep');ev(d+1,'00:00','07:00','sleep','Sleep')}
+  if(w===0||w===1||w===3)ev(d,'08:00','16:30','work','Day shift');
+  if(w===4){ev(d,'20:00','24:00','ea','Night shift');ev(d+1,'00:00','03:00','ea','Night shift (cont.)');ev(d+1,'03:30','10:00','sleep','Sleep')}
+  if(w===0||w===2||w===5)ev(d,'17:30','19:00','workout','Gym','Leg day');
+  if(w===2)ev(d,'12:00','12:30','event','Team meeting','Weekly',{recurrence:'FREQ=WEEKLY'});
+  if(w===6)ev(d,'10:00','13:00','event','Family visit')}
+ E.sort((a,b)=>a.date.localeCompare(b.date)||a.start.localeCompare(b.start));E.forEach((x,i)=>x.id='e'+(i+1));return E}
+async function startQA(){MODE.qa=true;MODE.kind='owner';MODE.cloud=false;MODE.user={uid:'qa-demo',email:'QA demo (sample data, nothing saved to an account)'};const n=nowTor();
+ STORE.briefing={date:n.iso,date_label:todayLabel(),greeting:'QA demo with a sample schedule. Edits stay in this browser tab.',generated:'Sample data',weather:null,aviation:null,shifts:[],overlap:false,movements:[],workout:null,tasks:[],noteworthy:[],focus:'Try editing the week',sixers:null,prospects:[],source:'qa'};
+ STORE.meta={briefing:'QA sample',schedule:'QA sample schedule'};STORE.archive=[];STORE.baseSchedule={timezone:TZ,updated:new Date().toISOString(),events:qaFeed(dnum(n.iso))};
+ await EDITS.load();rebuildSchedule();render();
+ if(qs.get('open')){const s=SECK(qs.get('open'));if(SEC[s]||s==='settings'){OV={sec:s,view:qs.get('view')||''};drawOV();document.body.classList.add('ovopen')}}}
 async function refreshUser(){await loadUser();render()}
 function userEventsCard(){const l=(MODE.sched.events||[]).slice().sort((a,b)=>a.start.localeCompare(b.start));
  return card('Your events',`${l.length?l.map(e=>`<button class="li ue" data-ua="ev" data-id="${esc(e.id)}"><div class="k" style="color:var(--${e.type in TYPEN?e.type:'event'})">${esc(TYPEN[e.type]||'Event')} · ${esc(e.start)}–${esc(e.end)} · ${esc((REP.find(r=>r[0]===(e.repeat||''))||REP[0])[1])}${e.repeat?'':' · '+esc(dlab(dnum(e.date)))}</div>${esc(e.label||TYPEN[e.type])}</button>`).join(''):'<div class="sm">Nothing yet. Add your work, classes, workouts and plans.</div>'}
@@ -426,9 +551,10 @@ function onboarding(again){const P=MODE.profile||{};const o={step:0,name:P.name|
 /* ---- owner detection + boot ---- */
 async function readFeed(u){try{const f=await JWAUTH.getCol(`briefing/${u.uid}/feed`);return f&&f.briefing&&f.briefing.data?f:null}catch(e){if(!JWAUTH.denied(e))console.warn('feed',e);return null}}
 async function loadFeed(f){STORE.briefing=f.briefing.data;STORE.briefing.source='live';STORE.meta.briefing='Live: your crew feed ('+(f.briefing.date||STORE.briefing.date)+')';
- STORE.schedule=f.schedule&&f.schedule.data||{events:[],updated:''};STORE.meta.schedule='Live: Cal\u2019s schedule feed';STORE.meta.scheduleUpdated=STORE.schedule.updated;
- STORE.archive=(f.archive&&f.archive.days)||[{date:STORE.briefing.date,label:STORE.briefing.date_label,focus:STORE.briefing.focus}];const B=STORE.briefing;B.tasks=noFin(B.tasks);B.noteworthy=noFin(B.noteworthy);MODEL.cache={}}
+ STORE.schedule=STORE.baseSchedule=unapply(f.schedule&&f.schedule.data||{events:[],updated:''});STORE.meta.schedule='Live: Cal\u2019s schedule feed';STORE.meta.scheduleUpdated=STORE.schedule.updated;
+ STORE.archive=(f.archive&&f.archive.days)||[{date:STORE.briefing.date,label:STORE.briefing.date_label,focus:STORE.briefing.focus}];const B=STORE.briefing;B.tasks=noFin(B.tasks);B.noteworthy=noFin(B.noteworthy);rebuildSchedule()}
 async function start(u){MODE.user=u;$('#app').innerHTML='<div class="boot">Loading MyAssistant…</div>';
+ await EDITS.load();
  const feed=await readFeed(u),ownerUid=CONFIG.OWNER_UID&&u.uid===CONFIG.OWNER_UID;
  if(feed){MODE.kind='owner';MODE.feed=true;await loadFeed(feed)}
  else if(CONFIG.PUBLIC_FALLBACK&&(ownerUid||localStorage.getItem('dbw:owner')==='1')){MODE.kind='owner';await load()}
@@ -438,11 +564,11 @@ async function start(u){MODE.user=u;$('#app').innerHTML='<div class="boot">Loadi
  render();
  if(qs.get('open')){const s=SECK(qs.get('open'));if((SEC[s]&&vis(s))||s==='settings'){OV={sec:s,view:qs.get('view')||(qs.get('open')==='week'?'week':'')};drawOV();document.body.classList.add('ovopen')}}
  setInterval(async()=>{if(!OV){if(isUser())await loadUser();else MODEL.cache={};render()}},isUser()?600000:60000)}
-function boot(){applyTheme();JWAUTH.ready().then(u=>{if(u)return start(u);$('#app').innerHTML='';
+function boot(){applyTheme();if(qs.get('qa')==='1')return startQA();JWAUTH.ready().then(u=>{if(u)return start(u);$('#app').innerHTML='';
   JWAUTH.gate({title:'MyAssistant',icon:'icons/icon-180.png',sub:'Your daily briefing and schedule. Sign in to start with a clean slate, or to see your own feeds.',note:'Same account as Logbook and Pantry.',onUser:start})})
  .catch(e=>{console.error(e);$('#app').innerHTML='<div class="boot">Couldn\u2019t load sign-in. Check your connection and reopen.</div>'})}
 
 /* ---------------- boot ---------------- */
 boot();
-window.__DBW={STORE,MODEL,SEC,MODE,CONFIG,decodeMetar,expandEvents};
+window.__DBW={STORE,MODEL,SEC,MODE,CONFIG,decodeMetar,expandEvents,EDITS,applyEdits,keyed,unapply,fnv};
 })();

@@ -6,13 +6,14 @@
 'use strict';
 const CFG={apiKey:"AIzaSyAe50ZOlninoeHPIrxq9aylnLROi3SFekY",authDomain:"logbook-e784a.firebaseapp.com",projectId:"logbook-e784a",storageBucket:"logbook-e784a.firebasestorage.app",messagingSenderId:"901165633464",appId:"1:901165633464:web:f201b53121ccf05f04c94d"};
 const SDK='https://www.gstatic.com/firebasejs/10.13.2/';
+const GLABEL='Continue with Google'; /* the gate's Google button label; error messages use the same words */
 let fb=null,initP=null;
 const load=src=>new Promise((res,rej)=>{const s=document.createElement('script');s.src=SDK+src;s.onload=res;s.onerror=()=>rej(new Error('Could not load sign-in (offline?)'));document.head.appendChild(s)});
 let redirectErr=null,redirectP=Promise.resolve();
 function init(){if(initP)return initP;initP=(async()=>{if(!window.firebase){await load('firebase-app-compat.js');await load('firebase-auth-compat.js');await load('firebase-firestore-compat.js')}
   if(!(firebase.apps&&firebase.apps.length))firebase.initializeApp(CFG);fb={auth:firebase.auth(),db:firebase.firestore()};
   /* Don't block on the redirect result: a Google tap must open its popup straight away (iOS drops the tap if we wait). */
-  redirectP=fb.auth.getRedirectResult().catch(e=>{redirectErr=e;console.warn('redirect result',e)});return fb})();return initP}
+  redirectP=fb.auth.getRedirectResult().catch(e=>{redirectErr=e;console.warn('redirect result',e)});return fb})().catch(e=>{initP=null;throw e});return initP} /* a failed load (offline) can retry */
 const ready=()=>init().then(f=>redirectP.then(()=>f)).then(f=>new Promise(res=>{const off=f.auth.onAuthStateChanged(u=>{off&&off();res(u)})}));
 const standalone=()=>navigator.standalone||matchMedia('(display-mode: standalone)').matches;
 const isIOS=()=>/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
@@ -21,13 +22,14 @@ const isIOS=()=>/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform=
    so the user comes back to the sign-in screen with no error. Redirect is only a last resort on other browsers when popups are blocked. */
 function google(){const go=()=>{const p=new firebase.auth.GoogleAuthProvider();p.setCustomParameters({prompt:'select_account'});
   return fb.auth.signInWithPopup(p).then(r=>r.user).catch(e=>{if(/popup-blocked|operation-not-supported/.test(e.code||'')&&!isIOS())return fb.auth.signInWithRedirect(p).then(()=>null);throw e})};
- return fb?go():init().then(go)}
+ if(fb)return go(); /* fb ready: popup opens synchronously inside the tap */
+ init().catch(()=>{});const e=new Error('Getting Google ready, tap again');e.code='app/not-ready';return Promise.reject(e)} /* never open the popup after an async load: iOS Safari blocks it (Bugsy) */
 async function email(em,pw,create){await init();try{return (create?await fb.auth.createUserWithEmailAndPassword(em,pw):await fb.auth.signInWithEmailAndPassword(em,pw)).user}
  catch(e){if(!create&&/invalid-credential|wrong-password|user-not-found|invalid-login/.test(e.code||'')){try{const m=await fb.auth.fetchSignInMethodsForEmail(em);if(m.indexOf('google.com')>=0&&m.indexOf('password')<0)e.code='app/google-account'}catch(_){}}throw e}}
 async function reset(em){await init();return fb.auth.sendPasswordResetEmail(em)}
 async function signOut(){await init();return fb.auth.signOut()}
 const denied=e=>/permission|insufficient/i.test(String(e&&(e.code||'')+' '+(e.message||e)));
-const errMsg=e=>{const c=String(e&&e.code||'');return /google-account/.test(c)?'This email uses Google sign-in. Tap Continue with Google.':/wrong-password|invalid-credential|user-not-found|invalid-login/.test(c)?'Email or password isn’t right. If you signed up with Google, tap “Use Google sign-in instead”. Or tap Forgot password.':/popup-blocked/.test(c)?'Your browser blocked the Google window. Tap Continue with Google again.':/too-many/.test(c)?'Too many tries. Wait a minute and try again.':/unauthorized-domain/.test(c)?'This page isn’t allowed to use Google sign-in yet.':/email-already/.test(c)?'That email already has an account. Sign in instead.':/weak-password/.test(c)?'Use at least 6 characters.':/invalid-email/.test(c)?'That email doesn’t look right.':/popup-closed|cancelled/.test(c)?'Sign-in was cancelled.':/network|unavailable/.test(c)?'You look offline. Try again.':denied(e)?'Access denied by the security rules.':(e&&e.message)||String(e)};
+const errMsg=e=>{const c=String(e&&e.code||'');return /google-account/.test(c)?'This email uses Google sign-in. Tap '+GLABEL+'.':/wrong-password|invalid-credential|user-not-found|invalid-login/.test(c)?'Email or password isn’t right. If you signed up with Google, tap “Use Google sign-in instead”. Or tap Forgot password.':/not-ready/.test(c)?'Getting Google ready, tap again':/popup-blocked/.test(c)?'Your browser blocked the Google window. Tap '+GLABEL+' again.':/too-many/.test(c)?'Too many tries. Wait a minute and try again.':/unauthorized-domain/.test(c)?'This page isn’t allowed to use Google sign-in yet.':/email-already/.test(c)?'That email already has an account. Sign in instead.':/weak-password/.test(c)?'Use at least 6 characters.':/invalid-email/.test(c)?'That email doesn’t look right.':/popup-closed|cancelled/.test(c)?'Sign-in was cancelled.':/network|unavailable/.test(c)?'You look offline. Try again.':denied(e)?'Access denied by the security rules.':(e&&e.message)||String(e)};
 async function getDoc(path){await init();const s=await fb.db.doc(path).get();return s.exists?s.data():null}
 async function setDoc(path,data,merge){await init();return fb.db.doc(path).set(data,merge?{merge:true}:undefined)}
 async function getCol(path){await init();const q=await fb.db.collection(path).get();const o={};q.forEach(d=>o[d.id]=d.data());return o}
@@ -47,7 +49,7 @@ function css(){if(document.getElementById('jwg-css'))return;const s=document.cre
 function gate(o){css();let el=document.getElementById('jwg');if(!el){el=document.createElement('div');el.id='jwg';el.className='jwg';document.body.appendChild(el)}
  let mode='start',create=false,err='';init().then(()=>redirectP).then(()=>{if(redirectErr&&!err){err=errMsg(redirectErr);redirectErr=null;draw()}}).catch(()=>{});
  const draw=()=>{el.innerHTML=`<div class="in">${o.icon?`<img class="ic" src="${esc(o.icon)}" alt="">`:''}<h1>${esc(o.title||'Sign in')}</h1><p>${o.sub||''}</p>
-  ${mode==='start'?`<button class="g" data-a="g">${GICON} Continue with Google</button>${o.email!==false?'<button class="gh" data-a="e">Sign in with email</button>':''}${(o.extra||[]).map((x,i)=>`<button class="lk" data-x="${i}">${esc(x.label)}</button>`).join('')}`
+  ${mode==='start'?`<button class="g" data-a="g">${GICON} ${GLABEL}</button>${o.email!==false?'<button class="gh" data-a="e">Sign in with email</button>':''}${(o.extra||[]).map((x,i)=>`<button class="lk" data-x="${i}">${esc(x.label)}</button>`).join('')}`
   :`<div class="seg"><button data-m="in" class="${create?'':'on'}">Sign in</button><button data-m="up" class="${create?'on':''}">Create account</button></div><input id="jwem" type="email" autocomplete="email" placeholder="Email"><input id="jwpw" type="password" autocomplete="${create?'new-password':'current-password'}" placeholder="Password"><button class="p" data-a="go">${create?'Create account':'Sign in'}</button><button class="lk" data-a="g">Use Google sign-in instead</button><button class="lk" data-a="fp">Forgot password?</button><button class="lk" data-a="bk">‹ Back</button>`}
   <div class="er">${esc(err)}</div>${o.note?`<p class="sm">${o.note}</p>`:''}</div>`;
   el.querySelectorAll('[data-a],[data-m],[data-x]').forEach(b=>b.onclick=async()=>{const a=b.dataset.a;err='';
@@ -59,5 +61,7 @@ function gate(o){css();let el=document.getElementById('jwg');if(!el){el=document
     else if(a==='fp'){const em=el.querySelector('#jwem').value.trim();if(!em){err='Type your email first.';return draw()}await reset(em);err='If that email has an account, a reset link is on its way.';return draw()}
     if(u){el.remove();o.onUser&&o.onUser(u)}}catch(e){console.warn('sign-in',e&&e.code,e);const ke=el.querySelector('#jwem'),kv=ke&&ke.value;err=errMsg(e);if(/google-account/.test(e&&e.code||''))mode='start';draw();const ne=el.querySelector('#jwem');if(ne&&kv)ne.value=kv}})};
  draw();return {close:()=>el.remove()}}
+/* Preload SDKs + auth as soon as the page loads (signed in or not), so the first Google tap opens the popup in the gesture. */
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>init().catch(()=>{}));else init().catch(()=>{});
 window.JWAUTH={css,init,ready,google,email,reset,signOut,gate,getDoc,setDoc,getCol,denied,errMsg,user:()=>fb&&fb.auth.currentUser,db:()=>fb&&fb.db,CFG};
 })();

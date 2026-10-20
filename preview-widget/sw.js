@@ -1,5 +1,5 @@
 // Own scope (./preview-widget/), so it never touches the main briefing's service worker.
-const C="briefing-widget-w5";
+const C="briefing-widget-w6";
 self.addEventListener("install",e=>self.skipWaiting());
 self.addEventListener("activate",e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k.startsWith("briefing-widget-")&&k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener("fetch",e=>{if(e.request.method!=="GET"||new URL(e.request.url).origin!==location.origin)return;
